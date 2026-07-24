@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>InstanSeg on WebGPU</title>
+<style>
+  :root { color-scheme: light dark; --bg:#0f1115; --panel:#171a21; --fg:#e6e8ec; --mut:#9aa4b2; --acc:#5b9dff; --line:#262b36; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); }
+  h1 { font-size:18px; margin:0 0 4px; }
+  header p { margin:0; color:var(--mut); }
+  main { display:grid; grid-template-columns:300px 1fr; gap:0; min-height:calc(100vh - 74px); }
+  .side { padding:20px 24px; border-right:1px solid var(--line); }
+  .side label { display:block; margin:14px 0 4px; color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  select,input,button { width:100%; padding:8px 10px; background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px; font:inherit; }
+  button { background:var(--acc); color:#fff; border:none; font-weight:600; cursor:pointer; margin-top:18px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .stat { display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px dashed var(--line); }
+  .stat b { font-variant-numeric:tabular-nums; }
+  .view { padding:20px 24px; }
+  .canvwrap { display:flex; gap:20px; flex-wrap:wrap; }
+  figure { margin:0; }
+  figcaption { color:var(--mut); font-size:12px; margin-bottom:6px; }
+  canvas { max-width:46vw; height:auto; border:1px solid var(--line); border-radius:8px; background:#000; image-rendering:pixelated; }
+  #log { margin-top:16px; font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--mut); white-space:pre-wrap; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:var(--panel); border:1px solid var(--line); font-size:12px; color:var(--mut); }
+</style></head>
+<body>
+<header>
+  <h1>InstanSeg <span class="pill">brightfield_nuclei</span> segmentation on <span class="pill">WebGPU</span></h1>
+  <p>Hand-written WGSL U-Net forward pass + JS learned-embedding instance decode. No PyTorch, no CUDA, no ML framework.</p>
+</header>
+<main>
+  <div class="side">
+    <label>Sample image</label>
+    <select id="img"></select>
+    <label>Or upload</label>
+    <input id="file" type="file" accept="image/*,.tif,.tiff">
+    <div id="chanBox" style="display:none">
+      <label>Red channel</label>
+      <select id="chR"></select>
+      <label>Green channel</label>
+      <select id="chG"></select>
+      <label>Blue channel</label>
+      <select id="chB"></select>
+    </div>
+    <label>Seed threshold</label>
+    <input id="sthr" type="number" value="0.7" step="0.05" min="0" max="1">
+    <label>Mask threshold</label>
+    <input id="mthr" type="number" value="0.53" step="0.05" min="0" max="1">
+    <button id="run" disabled>Segment</button>
+    <div style="margin-top:20px">
+      <div class="stat"><span>Preprocess</span><b id="s_pre">–</b></div>
+      <div class="stat"><span>Forward (WGSL)</span><b id="s_fwd">–</b></div>
+      <div class="stat"><span>Decode (JS)</span><b id="s_dec">–</b></div>
+      <div class="stat"><span>Total</span><b id="s_tot">–</b></div>
+      <div class="stat"><span>Nuclei found</span><b id="s_n">–</b></div>
+    </div>
+    <p style="margin-top:20px;color:var(--mut);font-size:12px">
+      brightfield_nuclei is a <b>nuclei</b> model trained on brightfield/H&amp;E. On these
+      fluorescence samples it finds few objects — upload a brightfield/H&amp;E nuclei image
+      for its intended use.
+    </p>
+  </div>
+  <div class="view">
+    <div class="canvwrap">
+      <figure><figcaption>Input</figcaption><canvas id="cin"></canvas></figure>
+      <figure><figcaption>Segmentation</figcaption><canvas id="cout"></canvas></figure>
+    </div>
+    <div id="log">initializing WebGPU…</div>
+  </div>
+</main>
+<script type="module">
+import { InstanSegWebGPU } from "../src/instanseg.js";
+import { loadSource } from "./tiff-loader.js";
+
+const SAMPLES = ["cellpose_img_003", "cellpose_image_020", "cellpose_img_075"];
+const $ = id => document.getElementById(id);
+const log = m => { $("log").textContent = m; };
+let is = null;
+let currentSource = null;
+let loadGen = 0;   // guards against a slow load resolving after a newer one clobbers currentSource
+
+for (const s of SAMPLES) { const o = document.createElement("option"); o.value = s; o.textContent = s; $("img").appendChild(o); }
+
+function toRGB(imgData) {
+  const { data, width: W, height: H } = imgData;
+  const rgb = new Float32Array(3 * W * H);
+  for (let i = 0; i < W * H; i++) { rgb[i] = data[i * 4]; rgb[W * H + i] = data[i * 4 + 1]; rgb[2 * W * H + i] = data[i * 4 + 2]; }
+  return { rgb, W, H };
+}
+function drawRGB(canvas, imgData) {
+  canvas.width = imgData.width; canvas.height = imgData.height;
+  canvas.getContext("2d").putImageData(imgData, 0, 0);
+}
+function drawLabels(canvas, labels, rgb, W, H) {
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d"), id = ctx.createImageData(W, H);
+  const col = l => { const h=(l*0.61803398875)%1,s=0.65,v=1; const i=Math.floor(h*6),f=h*6-i,p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);
+    const a=[[v,t,p],[q,v,p],[p,v,t],[p,q,v],[t,p,v],[v,p,q]][i%6]; return [a[0]*255,a[1]*255,a[2]*255]; };
+  const g = new Float32Array(W * H); let lo=Infinity,hi=-Infinity;
+  for (let i=0;i<W*H;i++){ const v=(rgb[i]+rgb[W*H+i]+rgb[2*W*H+i])/3; g[i]=v; if(v<lo)lo=v; if(v>hi)hi=v; }
+  const sc=1/(hi-lo+1e-9);
+  for (let i=0;i<W*H;i++){ const base=(g[i]-lo)*sc*160; const l=labels[i];
+    if(l===0){ id.data[i*4]=id.data[i*4+1]=id.data[i*4+2]=base; }
+    else { const [r,gg,b]=col(l); id.data[i*4]=r*0.6+base*0.4; id.data[i*4+1]=gg*0.6+base*0.4; id.data[i*4+2]=b*0.6+base*0.4; }
+    id.data[i*4+3]=255; }
+  ctx.putImageData(id, 0, 0);
+}
+
+// --- Channel-selection UI: shown only for genuinely multi-plane sources ---
+// InstanSeg's net is fixed 3-channel and order-sensitive (trained on brightfield RGB),
+// so each slot must resolve to a concrete plane — no "mean"/"none" options here.
+function populateChannelSelect(sel, planes) {
+  sel.innerHTML = "";
+  planes.forEach((p, i) => sel.appendChild(new Option(p.label, i)));
+}
+function applyChannelUI(source) {
+  const box = $("chanBox");
+  if (!source.multi) { box.style.display = "none"; return; }
+  box.style.display = "";
+  const n = source.planes.length;
+  for (const id of ["chR", "chG", "chB"]) populateChannelSelect($(id), source.planes);
+  $("chR").value = 0;
+  $("chG").value = Math.min(1, n - 1);
+  $("chB").value = Math.min(2, n - 1);
+}
+function selectRGB(source) {
+  if (source.imgData) return toRGB(source.imgData);
+  const { W, H, planes } = source;
+  if (!source.multi) {
+    const p = planes[0].data;   // single plane: replicate across R/G/B, same as a grayscale photo
+    const rgb = new Float32Array(3 * W * H); rgb.set(p, 0); rgb.set(p, W * H); rgb.set(p, 2 * W * H);
+    return { rgb, W, H };
+  }
+  const pick = id => planes[+$(id).value].data;
+  const r = pick("chR"), g = pick("chG"), b = pick("chB");
+  const rgb = new Float32Array(3 * W * H);
+  rgb.set(r, 0); rgb.set(g, W * H); rgb.set(b, 2 * W * H);
+  return { rgb, W, H };
+}
+function drawRGBPlanes(canvas, rgb, W, H) {
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d"), id = ctx.createImageData(W, H);
+  const stretch = off => { let lo=Infinity,hi=-Infinity; for (let i=0;i<W*H;i++){ const v=rgb[off+i]; if(v<lo)lo=v; if(v>hi)hi=v; } return { lo, s: 255/(hi-lo+1e-9) }; };
+  const rS = stretch(0), gS = stretch(W*H), bS = stretch(2*W*H);
+  for (let i = 0; i < W*H; i++) {
+    id.data[i*4]   = (rgb[i]         - rS.lo) * rS.s;
+    id.data[i*4+1] = (rgb[W*H+i]     - gS.lo) * gS.s;
+    id.data[i*4+2] = (rgb[2*W*H+i]   - bS.lo) * bS.s;
+    id.data[i*4+3] = 255;
+  }
+  ctx.putImageData(id, 0, 0);
+}
+function showInput(source) {
+  if (source.imgData) {
+    drawRGB($("cin"), source.imgData);
+    $("cout").width = source.imgData.width; $("cout").height = source.imgData.height;
+    $("cout").getContext("2d").clearRect(0, 0, source.imgData.width, source.imgData.height);
+    return;
+  }
+  const { rgb, W, H } = selectRGB(source);
+  drawRGBPlanes($("cin"), rgb, W, H);
+  $("cout").width = W; $("cout").height = H;
+  $("cout").getContext("2d").clearRect(0, 0, W, H);
+}
+
+async function init() {
+  try {
+    log("fetching weights…");
+    is = await InstanSegWebGPU.load();   // default: ../weights/instanseg-brightfield/ (pass a URL for a CDN)
+    log("ready. pick an image and Segment.");
+    $("run").disabled = false;
+    if (SAMPLES.length) {
+      $("img").value = SAMPLES[0];
+      currentSource = await loadSource("images/" + SAMPLES[0] + ".png");
+      applyChannelUI(currentSource);
+      showInput(currentSource);
+    }
+  } catch (e) { log("init error: " + e.message + "\n(serve over http://localhost, needs WebGPU)"); }
+}
+
+async function run() {
+  $("run").disabled = true;
+  try {
+    let source, name = $("img").value;
+    const f = $("file").files[0];
+    if (f) { source = await loadSource(f); name = f.name; }   // cheap: loadSource caches per File
+    else { source = await loadSource("images/" + name + ".png"); }
+    showInput(source);
+    const { rgb, W, H } = selectRGB(source);
+    log("segmenting " + name + " (" + W + "×" + H + ")…");
+    const opts = { seed_threshold: +$("sthr").value, mask_threshold: +$("mthr").value };
+    const t = performance.now();
+    const res = await is.segmentImage(rgb, H, W, opts);
+    const wall = performance.now() - t;
+    drawLabels($("cout"), res.labels, rgb, W, H);
+    const n = res.labels.reduce((m, v) => v > m ? v : m, 0);
+    $("s_pre").textContent = res.timings.preprocess.toFixed(1)+" ms";
+    $("s_fwd").textContent = res.timings.forward.toFixed(0)+" ms";
+    $("s_dec").textContent = res.timings.decode.toFixed(0)+" ms";
+    $("s_tot").textContent = res.timings.total.toFixed(0)+" ms";
+    $("s_n").textContent = n;
+    log("done: " + n + " nuclei in " + wall.toFixed(0) + " ms wall.");
+  } catch (e) { log("error: " + e.message); console.error(e); }
+  $("run").disabled = false;
+}
+
+$("run").addEventListener("click", run);
+$("img").addEventListener("change", async e => {
+  $("file").value = "";
+  const gen = ++loadGen;
+  const source = await loadSource("images/" + e.target.value + ".png");
+  if (gen !== loadGen) return;
+  currentSource = source;
+  applyChannelUI(currentSource);
+  showInput(currentSource);
+});
+$("file").addEventListener("change", async e => {
+  if (!e.target.files[0]) return;
+  const gen = ++loadGen;
+  try {
+    const source = await loadSource(e.target.files[0]);
+    if (gen !== loadGen) return;
+    currentSource = source;
+    applyChannelUI(currentSource);
+    showInput(currentSource);
+  } catch (err) { if (gen === loadGen) { log("error: " + err.message); console.error(err); } }
+});
+$("chR").addEventListener("change", () => { if (currentSource) showInput(currentSource); });
+$("chG").addEventListener("change", () => { if (currentSource) showInput(currentSource); });
+$("chB").addEventListener("change", () => { if (currentSource) showInput(currentSource); });
+init();
+</script>
+</body></html>

@@ -1,0 +1,35 @@
+Cellpose cyto3 — model weights (WebGPU-converted)
+=================================================
+
+These files (`weights.bin`, `manifest.json`) are a repackaging of the pretrained
+**Cellpose `cyto3`** model into a raw little-endian float32 tensor blob plus a JSON
+manifest of tensor names/offsets/shapes, for in-browser WebGPU inference. The numeric
+weights are unchanged from the upstream checkpoint; only the container format differs.
+
+Upstream model
+--------------
+- Project:  Cellpose (https://github.com/MouseLand/cellpose)
+- Model:    cyto3 (Cellpose 3, "cyto3" generalist cytoplasm model)
+- Source:   downloaded by the `cellpose` Python package from
+            https://www.cellpose.org/models  and exported via `tools/export_cellpose.py`
+- Copyright © 2020 Howard Hughes Medical Institute
+- License:  BSD-3-Clause (see the accompanying `LICENSE` file)
+
+License notice (BSD-3-Clause redistribution requirement)
+--------------------------------------------------------
+Redistribution and use in source and binary forms, with or without modification, are
+permitted provided that the conditions in `LICENSE` are met, including reproduction of
+the above copyright notice, the list of conditions, and the disclaimer. Neither the name
+of HHMI nor the names of its contributors may be used to endorse or promote products
+derived from this software without specific prior written permission.
+
+Please cite
+-----------
+Stringer, C., Wang, T., Michaelos, M. & Pachitariu, M. Cellpose: a generalist algorithm
+for cellular segmentation. Nature Methods 18, 100–106 (2021).
+Pachitariu, M. & Stringer, C. Cellpose 2.0 / Cellpose3 follow-ups (see the Cellpose repo).
+
+Provenance / integrity
+----------------------
+`SHA256SUMS` records the hashes of the files in this folder. Regenerate the blob from
+the upstream checkpoint with `tools/export_cellpose.py` if you want to verify it end to end.

@@ -1,0 +1,32 @@
+InstanSeg brightfield_nuclei — model weights (WebGPU-converted)
+==============================================================
+
+These files (`weights.bin`, `manifest.json`) are a repackaging of the pretrained
+**InstanSeg `brightfield_nuclei`** model into a raw little-endian float32 tensor blob
+plus a JSON manifest, for in-browser WebGPU inference. The numeric weights are unchanged
+from the upstream checkpoint; only the container format differs.
+
+Upstream model
+--------------
+- Project:  InstanSeg (https://github.com/instanseg/instanseg), `instanseg-torch`
+- Model:    brightfield_nuclei
+- Export:   via `tools/export_instanseg.py`
+- License:  Apache License 2.0 (see the accompanying `LICENSE` file)
+
+License notice (Apache-2.0)
+---------------------------
+Licensed under the Apache License, Version 2.0. You may not use these files except in
+compliance with the License; a copy is provided in `LICENSE`. Unless required by
+applicable law or agreed to in writing, the files are distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND. This NOTICE file is provided per Apache-2.0
+§4(d); retain it in redistributions.
+
+Please cite
+-----------
+Goldsborough, T. et al. InstanSeg: an embedding-based instance segmentation algorithm
+for microscopy images (see the InstanSeg repository for the current citation).
+
+Provenance / integrity
+----------------------
+`SHA256SUMS` records the file hashes. Regenerate from the upstream model with
+`tools/export_instanseg.py` to verify end to end.

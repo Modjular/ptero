@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebGPU cell segmentation — demos</title>
+<style>
+  :root { color-scheme: light dark; --bg:#0f1115; --panel:#171a21; --fg:#e6e8ec; --mut:#9aa4b2; --acc:#5b9dff; --line:#262b36; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  .wrap { max-width:760px; margin:0 auto; padding:48px 24px; }
+  h1 { font-size:24px; margin:0 0 6px; }
+  p.sub { color:var(--mut); margin:0 0 28px; }
+  a.card { display:block; text-decoration:none; color:inherit; background:var(--panel); border:1px solid var(--line);
+           border-radius:12px; padding:18px 20px; margin:12px 0; transition:border-color .15s; }
+  a.card:hover { border-color:var(--acc); }
+  a.card h2 { margin:0 0 4px; font-size:17px; }
+  a.card h2 .pill { font-size:12px; color:var(--mut); background:var(--bg); border:1px solid var(--line); border-radius:999px; padding:1px 8px; margin-left:6px; }
+  a.card p { margin:0; color:var(--mut); font-size:13px; }
+  .note { margin-top:28px; color:var(--mut); font-size:13px; }
+  code { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:12px; }
+  a { color:var(--acc); }
+</style></head>
+<body>
+<div class="wrap">
+  <h1>Cell segmentation in the browser, on WebGPU</h1>
+  <p class="sub">Three microscopy segmentation models ported to hand-written WGSL — no PyTorch, no TensorFlow, no CUDA, no ML framework at inference time. Serve this folder over <code>http://localhost</code> and open a demo (WebGPU required — Chrome/Edge, or Safari 18+).</p>
+
+  <a class="card" href="cellpose.html">
+    <h2>Cellpose <span class="pill">cyto3</span></h2>
+    <p>Generalist cytoplasm segmentation. CNN forward + flow dynamics, with cellpose-exact tiled inference — matches desktop Cellpose at AP@0.5 = 1.0.</p>
+  </a>
+  <a class="card" href="stardist.html">
+    <h2>StarDist <span class="pill">2D_versatile_fluo</span></h2>
+    <p>Star-convex nuclei segmentation. U-Net → radial distances → polygon NMS. Best on fluorescence-nuclei images.</p>
+  </a>
+  <a class="card" href="instanseg.html">
+    <h2>InstanSeg <span class="pill">brightfield_nuclei</span></h2>
+    <p>Embedding-based instance segmentation. U-Net → learned pixel embeddings → instance decode.</p>
+  </a>
+
+  <p class="note">Source, architecture notes, and the hard-won gotchas: see the repo
+  <a href="../README.md">README</a> and <a href="../docs/GOTCHAS.md">docs/GOTCHAS.md</a>.
+  Weights load from <code>../weights/&lt;model&gt;/</code> by default; point <code>Model.load(url)</code>
+  at a CDN to serve them elsewhere.</p>
+</div>
+</body></html>

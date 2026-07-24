@@ -1,0 +1,33 @@
+StarDist 2D_versatile_fluo — model weights (WebGPU-converted)
+============================================================
+
+These files (`weights.bin`, `manifest.json`) are a repackaging of the pretrained
+**StarDist `2D_versatile_fluo`** model into a raw little-endian float32 tensor blob plus
+a JSON manifest, for in-browser WebGPU inference. The numeric weights are unchanged from
+the upstream checkpoint; only the container format differs.
+
+Upstream model
+--------------
+- Project:  StarDist (https://github.com/stardist/stardist)
+- Model:    2D_versatile_fluo (bundled pretrained fluorescence-nuclei model)
+- Export:   via `tools/export_stardist.py`
+- License:  BSD-3-Clause (see the accompanying `LICENSE` file)
+
+License notice (BSD-3-Clause redistribution requirement)
+--------------------------------------------------------
+Redistribution in source and binary forms is permitted provided that the conditions in
+`LICENSE` are met, including reproduction of the copyright notice, the list of conditions,
+and the disclaimer. The names of the copyright holders/contributors may not be used to
+endorse or promote derived products without specific prior written permission.
+
+Please cite
+-----------
+Schmidt, U., Weigert, M., Broaddus, C. & Myers, G. Cell Detection with Star-convex
+Polygons. MICCAI 2018.
+Weigert, M., Schmidt, U., Haase, R., Sugawara, K. & Myers, G. Star-convex Polyhedra for
+3D Object Detection and Segmentation in Microscopy. WACV 2020.
+
+Provenance / integrity
+----------------------
+`SHA256SUMS` records the file hashes. Regenerate from the upstream model with
+`tools/export_stardist.py` to verify end to end.

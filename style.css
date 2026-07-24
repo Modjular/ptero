@@ -1,0 +1,158 @@
+/* ── Theme Variables ──────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+
+  /* Semantic UI Layering */
+  --bg-base: #1e1e1e; /* App background, deep containers */
+  --bg-surface: #252526; /* Sidebars, panels, rows */
+  --bg-surface-elevated: #2d2d2d; /* Top bar, active control highlights */
+  --bg-control: #333333; /* Inputs, standard button rest states */
+
+  /* Dedicated Viewport Colors */
+  --bg-viewport: #000000;
+  --bg-viewport-drag: #1a3a4a;
+  --bg-tile: #111111;
+
+  /* System Borders */
+  --border-subtle: #3d3d3d; /* Structural splitters & panel edges */
+  --border-control: #555555; /* Form inputs and buttons */
+
+  /* Typography System */
+  --text-main: #eeeeee; /* Primary text and titles */
+  --text-muted: #888888; /* Labels, headers, metadata */
+  --text-dim: #cccccc; /* Secondary content text */
+  --text-disabled: #666666; /* Disabled text/elements */
+  --text-light: #ffffff;
+
+  /* Semantic Accents */
+  --accent-primary: #287b60;
+  --accent-primary-hover: #236f55;
+  --accent-success: #28a745;
+  --accent-success-hover: #218838;
+  --accent-danger: #c0392b;
+  --accent-danger-hover: #a93226;
+  --accent-subtle: #3a3a3a;
+  --accent-subtle-hover: #444444;
+
+  /* Global Radius Tokens */
+  --radius-sm: 3px;
+  --radius-md: 6px;
+}
+
+/* ── Light Theme Overrides ────────────────────────────────────────── */
+body.theme-light {
+  color-scheme: light;
+
+  --bg-base: #f4f1ea;             /* Soft cream */
+  --bg-surface: #f9f7f2;          /* Lighter cream */
+  --bg-surface-elevated: #fdfdfa; /* Warm off-white */
+  --bg-control: #e6e2d8;
+
+  --bg-viewport: #e8e4db;
+  --bg-viewport-drag: #d4cfc1;
+  --bg-tile: #ffffff;
+
+  --border-subtle: #d6d0c4;
+  --border-control: #b8b1a2;
+
+  --text-main: #33302a;
+  --text-muted: #666156;
+  --text-dim: #4a463e;
+  --text-disabled: #999386;
+
+  --accent-subtle: #dcd7cc;
+  --accent-subtle-hover: #c9c3b6;
+}
+/* Fix subtle button contrast in light mode */
+body.theme-light .btn-subtle { color: var(--text-main); }
+
+/* ── Reset / Base ─────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--bg-base);
+  color: var(--text-main);
+  margin: 0;
+  padding: 24px;
+  max-width: 1100px;
+  margin-inline: auto;
+}
+
+h1 { font-size: 20px; margin: 0 0 4px; color: var(--text-main); }
+.sub { color: var(--text-muted); margin: 0 0 18px; }
+
+button {
+  font: inherit;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-control);
+  background: var(--accent-primary);
+  color: var(--text-light);
+  cursor: pointer;
+}
+button:hover:not(:disabled) { background: var(--accent-primary-hover); }
+button:disabled { opacity: .5; cursor: default; }
+
+.btn-subtle {
+  background: var(--accent-subtle);
+  color: var(--text-dim);
+  border-color: var(--border-control);
+}
+.btn-subtle:hover:not(:disabled) { background: var(--accent-subtle-hover); }
+
+.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+
+#log {
+  font: 12px/1.5 ui-monospace, monospace;
+  white-space: pre-wrap;
+  background: var(--bg-tile);
+  color: var(--text-dim);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  height: 160px;
+  overflow: auto;
+}
+
+table { border-collapse: collapse; font: 12px/1.4 ui-monospace, monospace; width: 100%; }
+th, td { border: 1px solid var(--border-subtle); padding: 3px 7px; text-align: right; }
+th { background: var(--bg-control); color: var(--text-main); }
+
+.tag {
+  font: 11px ui-monospace;
+  background: var(--bg-control);
+  color: var(--text-dim);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+#cells { display: flex; flex-direction: column; gap: 10px; margin: 18px 0; }
+.cell { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; background: var(--bg-surface); }
+.cell.cellerr { border-color: var(--accent-danger); }
+.cellbar {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  background: var(--bg-surface-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cellbar button { padding: 3px 9px; font-size: 12px; border-radius: var(--radius-sm); }
+.cellrun { background: var(--accent-primary); color: var(--text-light); }
+.cellrun:hover:not(:disabled) { background: var(--accent-primary-hover); }
+.celldel { margin-left: auto; }
+.cellstat { color: var(--text-muted); background: transparent; }
+
+.celleditor .cm-editor { font: 13px/1.4 ui-monospace, monospace; }
+.celleditor .cm-editor.cm-focused { outline: none; }
+.celleditor .cm-scroller { min-height: 40px; }
+
+.cellout { padding: 0 12px; border-top: 1px solid var(--border-subtle); }
+.cellout:empty { display: none; border-top: none; }
+.cellout-text { margin: 0; padding: 8px 0; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; color: var(--text-dim); }
+.cellout-fig { display: block; max-width: 100%; border-radius: var(--radius-md); margin: 8px 0; }
+.cellout-html { padding: 8px 0; overflow-x: auto; color: var(--text-dim); }
+.cellout-html table { width: auto; }
+
+.addcell-row { display: flex; }
+#addcell { width: 100%; border-style: dashed; }

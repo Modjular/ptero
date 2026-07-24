@@ -1,0 +1,348 @@
+{
+ "tensors": {
+  "conv2d.w": {
+   "offset": 0,
+   "length": 288,
+   "shape": [
+    32,
+    1,
+    3,
+    3
+   ]
+  },
+  "conv2d.b": {
+   "offset": 288,
+   "length": 32,
+   "shape": [
+    32
+   ]
+  },
+  "conv2d_1.w": {
+   "offset": 320,
+   "length": 9216,
+   "shape": [
+    32,
+    32,
+    3,
+    3
+   ]
+  },
+  "conv2d_1.b": {
+   "offset": 9536,
+   "length": 32,
+   "shape": [
+    32
+   ]
+  },
+  "down_level_0_no_0.w": {
+   "offset": 9568,
+   "length": 9216,
+   "shape": [
+    32,
+    32,
+    3,
+    3
+   ]
+  },
+  "down_level_0_no_0.b": {
+   "offset": 18784,
+   "length": 32,
+   "shape": [
+    32
+   ]
+  },
+  "down_level_0_no_1.w": {
+   "offset": 18816,
+   "length": 9216,
+   "shape": [
+    32,
+    32,
+    3,
+    3
+   ]
+  },
+  "down_level_0_no_1.b": {
+   "offset": 28032,
+   "length": 32,
+   "shape": [
+    32
+   ]
+  },
+  "down_level_1_no_0.w": {
+   "offset": 28064,
+   "length": 18432,
+   "shape": [
+    64,
+    32,
+    3,
+    3
+   ]
+  },
+  "down_level_1_no_0.b": {
+   "offset": 46496,
+   "length": 64,
+   "shape": [
+    64
+   ]
+  },
+  "down_level_1_no_1.w": {
+   "offset": 46560,
+   "length": 36864,
+   "shape": [
+    64,
+    64,
+    3,
+    3
+   ]
+  },
+  "down_level_1_no_1.b": {
+   "offset": 83424,
+   "length": 64,
+   "shape": [
+    64
+   ]
+  },
+  "down_level_2_no_0.w": {
+   "offset": 83488,
+   "length": 73728,
+   "shape": [
+    128,
+    64,
+    3,
+    3
+   ]
+  },
+  "down_level_2_no_0.b": {
+   "offset": 157216,
+   "length": 128,
+   "shape": [
+    128
+   ]
+  },
+  "down_level_2_no_1.w": {
+   "offset": 157344,
+   "length": 147456,
+   "shape": [
+    128,
+    128,
+    3,
+    3
+   ]
+  },
+  "down_level_2_no_1.b": {
+   "offset": 304800,
+   "length": 128,
+   "shape": [
+    128
+   ]
+  },
+  "middle_0.w": {
+   "offset": 304928,
+   "length": 294912,
+   "shape": [
+    256,
+    128,
+    3,
+    3
+   ]
+  },
+  "middle_0.b": {
+   "offset": 599840,
+   "length": 256,
+   "shape": [
+    256
+   ]
+  },
+  "middle_2.w": {
+   "offset": 600096,
+   "length": 294912,
+   "shape": [
+    128,
+    256,
+    3,
+    3
+   ]
+  },
+  "middle_2.b": {
+   "offset": 895008,
+   "length": 128,
+   "shape": [
+    128
+   ]
+  },
+  "up_level_2_no_0.w": {
+   "offset": 895136,
+   "length": 294912,
+   "shape": [
+    128,
+    256,
+    3,
+    3
+   ]
+  },
+  "up_level_2_no_0.b": {
+   "offset": 1190048,
+   "length": 128,
+   "shape": [
+    128
+   ]
+  },
+  "up_level_2_no_2.w": {
+   "offset": 1190176,
+   "length": 73728,
+   "shape": [
+    64,
+    128,
+    3,
+    3
+   ]
+  },
+  "up_level_2_no_2.b": {
+   "offset": 1263904,
+   "length": 64,
+   "shape": [
+    64
+   ]
+  },
+  "up_level_1_no_0.w": {
+   "offset": 1263968,
+   "length": 73728,
+   "shape": [
+    64,
+    128,
+    3,
+    3
+   ]
+  },
+  "up_level_1_no_0.b": {
+   "offset": 1337696,
+   "length": 64,
+   "shape": [
+    64
+   ]
+  },
+  "up_level_1_no_2.w": {
+   "offset": 1337760,
+   "length": 18432,
+   "shape": [
+    32,
+    64,
+    3,
+    3
+   ]
+  },
+  "up_level_1_no_2.b": {
+   "offset": 1356192,
+   "length": 32,
+   "shape": [
+    32
+   ]
+  },
+  "up_level_0_no_0.w": {
+   "offset": 1356224,
+   "length": 18432,
+   "shape": [
+    32,
+    64,
+    3,
+    3
+   ]
+  },
+  "up_level_0_no_0.b": {
+   "offset": 1374656,
+   "length": 32,
+   "shape": [
+    32
+   ]
+  },
+  "up_level_0_no_2.w": {
+   "offset": 1374688,
+   "length": 9216,
+   "shape": [
+    32,
+    32,
+    3,
+    3
+   ]
+  },
+  "up_level_0_no_2.b": {
+   "offset": 1383904,
+   "length": 32,
+   "shape": [
+    32
+   ]
+  },
+  "features.w": {
+   "offset": 1383936,
+   "length": 36864,
+   "shape": [
+    128,
+    32,
+    3,
+    3
+   ]
+  },
+  "features.b": {
+   "offset": 1420800,
+   "length": 128,
+   "shape": [
+    128
+   ]
+  },
+  "prob.w": {
+   "offset": 1420928,
+   "length": 128,
+   "shape": [
+    1,
+    128,
+    1,
+    1
+   ]
+  },
+  "prob.b": {
+   "offset": 1421056,
+   "length": 1,
+   "shape": [
+    1
+   ]
+  },
+  "dist.w": {
+   "offset": 1421057,
+   "length": 4096,
+   "shape": [
+    32,
+    128,
+    1,
+    1
+   ]
+  },
+  "dist.b": {
+   "offset": 1425153,
+   "length": 32,
+   "shape": [
+    32
+   ]
+  }
+ },
+ "conv_layers": [
+  "conv2d",
+  "conv2d_1",
+  "down_level_0_no_0",
+  "down_level_0_no_1",
+  "down_level_1_no_0",
+  "down_level_1_no_1",
+  "down_level_2_no_0",
+  "down_level_2_no_1",
+  "middle_0",
+  "middle_2",
+  "up_level_2_no_0",
+  "up_level_2_no_2",
+  "up_level_1_no_0",
+  "up_level_1_no_2",
+  "up_level_0_no_0",
+  "up_level_0_no_2",
+  "features",
+  "prob",
+  "dist"
+ ]
+}
