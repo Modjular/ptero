@@ -22,6 +22,8 @@
 // this channel's BLK×K×K weight slab (~1.6KB shared, high occupancy) and all
 // 256 threads accumulate BLK output channels from shared memory.
 // (cp005's larger CHUNK tiling was reverted — it cut GPU occupancy.)
+import { sharedDevice } from "./gpu.js";
+
 const BLK = 8;
 const TS = 16;          // tile side
 const TW = TS + 2;      // tile side incl. halo (max pad = 1 for K∈{1,3})
@@ -264,18 +266,10 @@ export class CellposeWebGPU {
     this._inUse = [];        // buffers acquired during the current forward
   }
 
+  // The device is shared across every engine on the page (see gpu.js) — a page that
+  // uses two models gets two sets of pipelines, not two GPU devices.
   static async create() {
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-    if (!adapter) throw new Error("no WebGPU adapter");
-    const lim = adapter.limits;
-    const device = await adapter.requestDevice({
-      requiredLimits: {
-        maxBufferSize: lim.maxBufferSize,
-        maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize,
-        maxComputeInvocationsPerWorkgroup: lim.maxComputeInvocationsPerWorkgroup,
-      }
-    });
-    return new CellposeWebGPU(device);
+    return new CellposeWebGPU(await sharedDevice());
   }
 
   loadWeights(manifest, binArrayBuffer) {
@@ -300,14 +294,16 @@ export class CellposeWebGPU {
   // the importing page lives). Pass a base URL — e.g. a HuggingFace or jsDelivr
   // URL — to load the weights from a CDN instead:
   //   const cp = await CellposeWebGPU.load("https://huggingface.co/<you>/cellpose-webgpu/resolve/main/cellpose-cyto3/");
+  // Pass `device` to build on an already-acquired GPUDevice (what registry.js does)
+  // instead of going through sharedDevice() again.
   static async load(baseURL = new URL("../weights/cellpose-cyto3/", import.meta.url).href,
-                    { manifest = "manifest.json", weights = "weights.bin" } = {}) {
+                    { manifest = "manifest.json", weights = "weights.bin", device = null } = {}) {
     const base = baseURL.endsWith("/") ? baseURL : baseURL + "/";
     const [mf, bin] = await Promise.all([
       fetch(base + manifest).then(r => r.json()),
       fetch(base + weights).then(r => r.arrayBuffer()),
     ]);
-    const inst = await this.create();
+    const inst = device ? new this(device) : await this.create();
     inst.loadWeights(mf, bin);
     return inst;
   }

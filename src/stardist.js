@@ -17,6 +17,8 @@
 // is the cellpose tiled conv stripped of BN/skip/residual, with ReLU applied to
 // the conv *output* (StarDist is conv->ReLU, where cellpose folds BN pre-conv).
 
+import { sharedDevice } from "./gpu.js";
+
 const N_RAYS = 32;
 const BLK = 8;          // output channels accumulated per workgroup (register block)
 const TS = 16;          // tile side
@@ -249,18 +251,9 @@ export class StarDistWebGPU {
     this._inUse = [];
   }
 
+  // Device is shared across every engine on the page — see gpu.js.
   static async create() {
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-    if (!adapter) throw new Error("no WebGPU adapter");
-    const lim = adapter.limits;
-    const device = await adapter.requestDevice({
-      requiredLimits: {
-        maxBufferSize: lim.maxBufferSize,
-        maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize,
-        maxComputeInvocationsPerWorkgroup: lim.maxComputeInvocationsPerWorkgroup,
-      }
-    });
-    return new StarDistWebGPU(device);
+    return new StarDistWebGPU(await sharedDevice());
   }
 
   loadWeights(manifest, binArrayBuffer) {
@@ -285,14 +278,15 @@ export class StarDistWebGPU {
   // Convenience loader: fetch manifest.json + weights.bin from a base URL and
   // return a ready instance. Default resolves to this repo's weights/stardist-fluo/
   // relative to this module; pass a CDN/HuggingFace base URL for production.
+  // Pass `device` to build on an already-acquired GPUDevice (what registry.js does).
   static async load(baseURL = new URL("../weights/stardist-fluo/", import.meta.url).href,
-                    { manifest = "manifest.json", weights = "weights.bin" } = {}) {
+                    { manifest = "manifest.json", weights = "weights.bin", device = null } = {}) {
     const base = baseURL.endsWith("/") ? baseURL : baseURL + "/";
     const [mf, bin] = await Promise.all([
       fetch(base + manifest).then(r => r.json()),
       fetch(base + weights).then(r => r.arrayBuffer()),
     ]);
-    const inst = await this.create();
+    const inst = device ? new this(device) : await this.create();
     inst.loadWeights(mf, bin);
     return inst;
   }

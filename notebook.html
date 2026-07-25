@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ptero — notebook</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🔬</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="chat-open">
+<div id="main">
+
+<h1>ptero notebook</h1>
+<p class="sub">Real scientific Python — numpy, pandas, scikit-image, matplotlib — running
+entirely in this tab under Pyodide. Segmentation calls are routed to hand-written WGSL
+running on your GPU. Nothing is uploaded anywhere.
+<span class="tag">cellpose · stardist · instanseg</span>
+<span class="tag">weights load on first use</span>
+<span class="tag">your files stay on your disk</span></p>
+
+<div class="row">
+  <button id="runall">▶▶ Run all</button>
+  <button id="choosews" class="btn-subtle">📁 Choose workspace folder</button>
+  <button id="refreshws" class="btn-subtle" title="Re-read the folder">↻</button>
+  <button id="resetcells" class="btn-subtle">↺ Reset to example</button>
+  <button id="chattoggle" class="btn-subtle">💬 Assistant</button>
+  <button id="themetoggle" class="btn-subtle">🌙 Dark</button>
+  <span id="stat" class="tag">booting…</span>
+</div>
+<p class="sub" id="workspace-info"></p>
+<div id="downloads"></div>
+
+<div id="cells"></div>
+<div class="addcell-row"><button id="addcell" class="btn-subtle">+ add cell</button></div>
+
+</div><!-- /#main -->
+
+<aside id="chat">
+  <div class="chathead">
+    <b>Co-scientist</b>
+    <button id="chatreset" class="btn-subtle" title="Start a new conversation">↺</button>
+    <button id="chatsettings" class="btn-subtle" title="API key and model">⚙</button>
+  </div>
+  <div id="chatlog"></div>
+  <div class="chatbox">
+    <textarea id="chatinput" rows="1" placeholder="Describe what you want to measure…"></textarea>
+    <button id="chatsend">Send</button>
+  </div>
+</aside>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h2>Agent settings</h2>
+
+    <label for="providersel">Provider</label>
+    <select id="providersel"></select>
+
+    <label for="apikey">API key</label>
+    <input id="apikey" type="password" autocomplete="off">
+    <p class="hint" id="keyhint"></p>
+
+    <label for="modelname">Model</label>
+    <div class="field-row">
+      <input id="modelname" type="text" spellcheck="false" list="modellist"
+             placeholder="model id">
+      <button type="button" id="loadmodels" class="btn-subtle">List models</button>
+    </div>
+    <datalist id="modellist"></datalist>
+    <p class="hint" id="modelhint">Keys and model choices are remembered per provider.</p>
+
+    <div class="row">
+      <button id="settingssave">Save</button>
+      <button value="cancel" class="btn-subtle">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Pyodide defines the global loadPyodide that kernel.js calls. -->
+<script src="https://cdn.jsdelivr.net/pyodide/v0.28.0/full/pyodide.js"></script>
+<script type="module">
+  import { start } from './src/notebook/ui.js';
+  start();
+</script>
+</body>
+</html>

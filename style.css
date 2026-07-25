@@ -81,6 +81,38 @@ body {
   margin-inline: auto;
 }
 
+/* The notebook page splits into the document and the assistant pane. Without the
+   pane open it stays a plain centred column, unchanged. */
+body:has(#chat) { max-width: none; padding: 0; }
+/* `width: 100%` is load-bearing. `margin-inline: auto` on a grid item makes the auto
+   margins absorb the free space, which disables stretch alignment — the item is then
+   sized to fit-content instead of to its track. Fit-content here is driven by
+   CodeMirror's long unwrapped lines (~890px), so #main overflowed its 400px column,
+   painted over the assistant pane, and made the Send button unclickable while looking
+   perfectly fine. Giving it an explicit width restores track sizing; max-width still
+   caps it and the auto margins still centre it when the window is wide. */
+body:has(#chat) #main {
+  padding: 24px;
+  width: 100%;
+  max-width: 1100px;
+  margin-inline: auto;
+  min-width: 0;
+}
+body.chat-open:has(#chat) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+  height: 100vh;
+}
+/* min-width:0 is load-bearing, not tidying. A grid item defaults to min-width:auto,
+   which refuses to shrink below its content's min-content width — and CodeMirror's
+   long unwrapped lines are very wide. Without this the notebook column overflows its
+   track, paints over the assistant pane, and the Send button becomes unclickable even
+   though it is plainly visible. Same reason for the two below: #cells is a flex
+   column, and its items inherit the same default. */
+body.chat-open #main { overflow: auto; min-width: 0; }
+body:not(.chat-open) #chat { display: none; }
+#cells, .cell, .celleditor { min-width: 0; }
+
 h1 { font-size: 20px; margin: 0 0 4px; color: var(--text-main); }
 .sub { color: var(--text-muted); margin: 0 0 18px; }
 
@@ -105,17 +137,35 @@ button:disabled { opacity: .5; cursor: default; }
 
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
 
-#log {
-  font: 12px/1.5 ui-monospace, monospace;
-  white-space: pre-wrap;
-  background: var(--bg-tile);
-  color: var(--text-dim);
-  border: 1px solid var(--border-subtle);
+/* The on-screen log panel is gone on purpose: everything it showed still goes to the
+   DevTools console via console.log, and a terminal pinned above the cells works
+   against this reading as a notebook rather than a dev tool. */
+
+.banner {
+  border: 1px solid var(--accent-danger);
   border-radius: var(--radius-md);
-  padding: 12px;
-  height: 160px;
-  overflow: auto;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: color-mix(in srgb, var(--accent-danger) 12%, var(--bg-surface));
 }
+.banner-warn {
+  border-color: var(--border-control);
+  background: var(--bg-surface-elevated);
+  color: var(--text-dim);
+}
+
+#downloads { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+#downloads:empty { display: none; }
+.download {
+  font: 12px ui-monospace, monospace;
+  text-decoration: none;
+  color: var(--text-dim);
+  background: var(--bg-control);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+}
+.download:hover { border-color: var(--accent-primary); color: var(--text-main); }
 
 table { border-collapse: collapse; font: 12px/1.4 ui-monospace, monospace; width: 100%; }
 th, td { border: 1px solid var(--border-subtle); padding: 3px 7px; text-align: right; }
@@ -130,18 +180,50 @@ th { background: var(--bg-control); color: var(--text-main); }
 }
 
 #cells { display: flex; flex-direction: column; gap: 10px; margin: 18px 0; }
-.cell { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; background: var(--bg-surface); }
-.cell.cellerr { border-color: var(--accent-danger); }
-.cellbar {
-  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
-  background: var(--bg-surface-elevated);
-  border-bottom: 1px solid var(--border-subtle);
+
+/* A cell is a document block, not a control panel: no persistent header bar. Run
+   state lives in the left border, and the buttons appear on hover/focus. */
+.cell {
+  position: relative;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
 }
-.cellbar button { padding: 3px 9px; font-size: 12px; border-radius: var(--radius-sm); }
+.cell[data-state="running"] { border-left-color: var(--accent-primary); }
+.cell[data-state="done"]    { border-left-color: var(--accent-success); }
+.cell[data-state="error"]   { border-left-color: var(--accent-danger); }
+
+/* Cells the agent wrote are marked, so it is always clear who authored what. */
+.cell[data-author="agent"]::after {
+  content: "agent";
+  position: absolute; top: 6px; right: 8px;
+  font: 10px ui-monospace, monospace;
+  color: var(--text-muted);
+  letter-spacing: .04em;
+  pointer-events: none;
+}
+
+@keyframes cellflash { from { background: var(--accent-subtle-hover); } to { background: var(--bg-surface); } }
+.cell-flash { animation: cellflash 1.1s ease-out; }
+
+.cellctrls {
+  position: absolute; top: 4px; right: 4px; z-index: 2;
+  display: flex; gap: 4px;
+  opacity: 0; transition: opacity .12s;
+}
+.cell:hover .cellctrls, .cell:focus-within .cellctrls { opacity: 1; }
+.cellctrls button { padding: 2px 8px; font-size: 12px; border-radius: var(--radius-sm); }
 .cellrun { background: var(--accent-primary); color: var(--text-light); }
 .cellrun:hover:not(:disabled) { background: var(--accent-primary-hover); }
-.celldel { margin-left: auto; }
-.cellstat { color: var(--text-muted); background: transparent; }
+
+.cellstat {
+  font: 11px ui-monospace, monospace;
+  color: var(--text-muted);
+  padding: 0 12px 6px;
+  min-height: 0;
+}
+.cellstat:empty { display: none; }
 
 .celleditor .cm-editor { font: 13px/1.4 ui-monospace, monospace; }
 .celleditor .cm-editor.cm-focused { outline: none; }
@@ -156,3 +238,115 @@ th { background: var(--bg-control); color: var(--text-main); }
 
 .addcell-row { display: flex; }
 #addcell { width: 100%; border-style: dashed; }
+
+/* ── Landing page cards ───────────────────────────────────────────── */
+.cards { display: flex; flex-direction: column; gap: 12px; margin: 20px 0; }
+a.card {
+  display: block; text-decoration: none; color: inherit;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  transition: border-color .15s;
+}
+a.card:hover { border-color: var(--accent-primary); }
+a.card h2 { margin: 0 0 4px; font-size: 16px; }
+a.card p { margin: 0; color: var(--text-muted); font-size: 13px; }
+a.card.primary { background: var(--bg-surface-elevated); border-color: var(--border-control); }
+.note { color: var(--text-muted); font-size: 13px; margin-top: 24px; }
+code {
+  background: var(--bg-control); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm); padding: 1px 5px; font-size: 12px;
+}
+
+/* ── Assistant pane ───────────────────────────────────────────────── */
+#chat {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  min-width: 0;
+}
+.chathead {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+}
+.chathead b { flex: 1; font-size: 13px; }
+.chathead button { padding: 3px 9px; font-size: 12px; border-radius: var(--radius-sm); }
+
+#chatlog { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+
+.msg { border-radius: var(--radius-md); padding: 9px 12px; max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; }
+.msg.bot { background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); }
+.msg.me  { background: var(--accent-primary); color: var(--text-light); align-self: flex-end; max-width: 85%; }
+.msg.err { background: color-mix(in srgb, var(--accent-danger) 15%, var(--bg-surface)); border: 1px solid var(--accent-danger); }
+.msg code { font-size: 12px; }
+.msg-code {
+  margin: 8px 0 4px; padding: 9px 11px;
+  background: var(--bg-tile); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font: 12px/1.45 ui-monospace, monospace;
+  white-space: pre; overflow-x: auto;
+}
+.ask-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.ask-opts button { padding: 4px 11px; font-size: 12px; border-radius: var(--radius-sm); }
+
+/* Activity chips: enough to see the agent working, never a debug log. */
+.chip {
+  align-self: flex-start;
+  font: 11px ui-monospace, monospace;
+  color: var(--text-muted);
+  padding: 2px 9px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 999px;
+}
+.chip-link { cursor: pointer; border-style: solid; }
+.chip-link:hover { color: var(--text-main); border-color: var(--accent-primary); }
+
+.chatbox {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 12px; border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+}
+#chatinput {
+  flex: 1; resize: none; font: inherit; line-height: 1.4;
+  padding: 8px 10px;
+  background: var(--bg-control); color: var(--text-main);
+  border: 1px solid var(--border-control); border-radius: var(--radius-md);
+}
+#chatinput:disabled { opacity: .6; }
+#chatsend { padding: 8px 14px; }
+
+/* ── Settings dialog ──────────────────────────────────────────────── */
+#settings {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-main);
+  padding: 20px 22px;
+  max-width: 440px;
+}
+#settings::backdrop { background: rgb(0 0 0 / .5); }
+#settings h2 { font-size: 15px; margin: 0 0 14px; }
+#settings label { display: block; font-size: 12px; color: var(--text-muted); margin: 12px 0 4px; }
+#settings input {
+  width: 100%; font: inherit; padding: 7px 9px;
+  background: var(--bg-control); color: var(--text-main);
+  border: 1px solid var(--border-control); border-radius: var(--radius-sm);
+}
+#settings .hint { font-size: 11px; color: var(--text-muted); margin: 7px 0 0; line-height: 1.45; }
+#settings .row { margin: 18px 0 0; }
+
+#settings select {
+  width: 100%; font: inherit; padding: 7px 9px;
+  background: var(--bg-control); color: var(--text-main);
+  border: 1px solid var(--border-control); border-radius: var(--radius-sm);
+}
+#settings .field-row { display: flex; gap: 8px; }
+#settings .field-row input { flex: 1; min-width: 0; }
+#settings .field-row button { padding: 7px 12px; font-size: 12px; white-space: nowrap; }
+#settings .hint a { color: var(--accent-primary); }
+body.theme-light #settings .hint a { color: var(--accent-primary-hover); }

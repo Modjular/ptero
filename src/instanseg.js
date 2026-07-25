@@ -14,6 +14,8 @@
 // residual/skip merges are elementwise adds (ADD_WGSL). Output = 2 coord fields +
 // 2 sigma + 1 seed channel; the decode grows one instance from each seed.
 
+import { sharedDevice } from "./gpu.js";
+
 const BLK = 8, TS = 16, TW = TS + 2;
 const N_COORD = 2, N_SIGMA = 2;
 
@@ -113,14 +115,9 @@ export class InstanSegWebGPU {
     this.pConv = mk(CONV_WGSL); this.pPool = mk(POOL_WGSL); this.pUp = mk(UP_WGSL); this.pAdd = mk(ADD_WGSL);
     this.buf = {}; this._pool = new Map(); this._inUse = [];
   }
+  // Device is shared across every engine on the page — see gpu.js.
   static async create() {
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-    if (!adapter) throw new Error("no WebGPU adapter");
-    const lim = adapter.limits;
-    const device = await adapter.requestDevice({ requiredLimits: {
-      maxBufferSize: lim.maxBufferSize, maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize,
-      maxComputeInvocationsPerWorkgroup: lim.maxComputeInvocationsPerWorkgroup } });
-    return new InstanSegWebGPU(device);
+    return new InstanSegWebGPU(await sharedDevice());
   }
   loadWeights(manifest, binArrayBuffer) {
     this.manifest = manifest; this.tensors = manifest.tensors; this.relu = manifest.relu;
@@ -140,14 +137,15 @@ export class InstanSegWebGPU {
   // return a ready instance. Default resolves to this repo's
   // weights/instanseg-brightfield/ relative to this module; pass a CDN/HuggingFace
   // base URL for production.
+  // Pass `device` to build on an already-acquired GPUDevice (what registry.js does).
   static async load(baseURL = new URL("../weights/instanseg-brightfield/", import.meta.url).href,
-                    { manifest = "manifest.json", weights = "weights.bin" } = {}) {
+                    { manifest = "manifest.json", weights = "weights.bin", device = null } = {}) {
     const base = baseURL.endsWith("/") ? baseURL : baseURL + "/";
     const [mf, bin] = await Promise.all([
       fetch(base + manifest).then(r => r.json()),
       fetch(base + weights).then(r => r.arrayBuffer()),
     ]);
-    const inst = await this.create();
+    const inst = device ? new this(device) : await this.create();
     inst.loadWeights(mf, bin);
     return inst;
   }
