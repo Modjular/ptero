@@ -17,6 +17,9 @@ python3 tools/test_shims.py --sync   # ...in JSPI mode; BOTH must pass
 node tools/drive.mjs --stage demo/images/Composite.tif   # full notebook, real GPU
 node tools/test_agent.mjs                                # agent harness, both providers
 node tools/test_agent.mjs --only gemini                  # one provider
+
+node tools/profile.mjs                                   # Phase 0 throughput accounting
+node tools/profile.mjs --only composite --repeats 9      # one workload, more repeats
 ```
 
 Useful flags: `drive.mjs --headful --logs --keep` (`--keep` preserves the cells in
@@ -58,8 +61,19 @@ discovery surface the imitations can't provide.
 we own precisely because the agent acts on it directly; `push_to_ui` calls `insertCell`
 rather than faking a click.
 
+**`src/profile/` is measurement, not pipeline.** It attaches to an engine by substituting
+its `_mkEncoder` hook for one that wraps every compute pass in timestamp queries, so no op
+method knows profiling exists and the unprofiled path keeps its behaviour. Byte traffic
+and FLOPs are *derived from the shaders* in `cost.js` rather than counted — WebGPU has no
+DRAM or occupancy counters — which only works because the kernels are hand-written. The
+labels each op passes to `beginComputePass` are the contract between the engines and
+`parseLabel()`; change them together. Nothing here is imported unless a profiling run asks
+for it.
+
 `docs/ARCHITECTURE.md` has the reasoning behind all of this and a longer gotcha list.
-Read it before changing architecture.
+Read it before changing architecture. `docs/PHASE0.md` is the throughput accounting and
+its gate decision — read it before optimising anything, because it says which 0.2% of the
+dispatches are not worth your time.
 
 ## Things that will waste your time if you don't know them
 

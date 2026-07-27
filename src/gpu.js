@@ -19,7 +19,15 @@ export function sharedDevice() {
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
       if (!adapter) throw new Error("no WebGPU adapter");
       const lim = adapter.limits;
+      // `timestamp-query` is what src/profile/ measures per-dispatch GPU time with. It
+      // must be feature-detected rather than requested outright — requestDevice()
+      // *rejects* if a requiredFeature is unavailable, so asking unconditionally would
+      // break every machine that lacks it. It downloads nothing and allocates nothing,
+      // so holding it costs the ~5 MB cold start nothing; the query sets themselves are
+      // only created when a profiling run asks for them.
+      const requiredFeatures = adapter.features.has("timestamp-query") ? ["timestamp-query"] : [];
       const device = await adapter.requestDevice({
+        requiredFeatures,
         requiredLimits: {
           maxBufferSize: lim.maxBufferSize,
           maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize,

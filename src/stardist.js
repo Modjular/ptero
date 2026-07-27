@@ -256,6 +256,9 @@ export class StarDistWebGPU {
     return new StarDistWebGPU(await sharedDevice());
   }
 
+  // Profiling hook, same contract as CellposeWebGPU — see src/profile/timing.js.
+  _mkEncoder(label) { return this.device.createCommandEncoder({ label }); }
+
   loadWeights(manifest, binArrayBuffer) {
     this.manifest = manifest;
     this.tensors = manifest.tensors;
@@ -331,7 +334,8 @@ export class StarDistWebGPU {
         { binding: 4, resource: { buffer: outBuf } },
       ]
     });
-    const pass = enc.beginComputePass();
+    const pass = enc.beginComputePass({
+      label: `conv|${name}|${Cin}->${Cout}|${H}x${W}|k${K}${relu ? "|relu" : ""}` });
     pass.setPipeline(this.pConv); pass.setBindGroup(0, bg);
     pass.dispatchWorkgroups(Math.ceil(W / 16), Math.ceil(H / 16), Math.ceil(Cout / BLK));
     pass.end();
@@ -346,7 +350,7 @@ export class StarDistWebGPU {
         { binding: 2, resource: { buffer: outBuf } },
       ]
     });
-    const pass = enc.beginComputePass();
+    const pass = enc.beginComputePass({ label: `pool|${Hi}x${Wi}->${Ho}x${Wo}|C${C}` });
     pass.setPipeline(this.pPool); pass.setBindGroup(0, bg);
     pass.dispatchWorkgroups(Math.ceil(Wo / 16), Math.ceil(Ho / 16), C);
     pass.end();
@@ -362,7 +366,7 @@ export class StarDistWebGPU {
         { binding: 2, resource: { buffer: outBuf } },
       ]
     });
-    const pass = enc.beginComputePass();
+    const pass = enc.beginComputePass({ label: `up|${Hi}x${Wi}->${Ho}x${Wo}|C${C}` });
     pass.setPipeline(this.pUp); pass.setBindGroup(0, bg);
     pass.dispatchWorkgroups(Math.ceil(Wo / 16), Math.ceil(Ho / 16), C);
     pass.end();
@@ -382,7 +386,7 @@ export class StarDistWebGPU {
     const d = this.device;
     const inBuf = this.mkStorage(this.nChannelIn * Hp * Wp);
     d.queue.writeBuffer(inBuf, 0, inputF32);
-    const enc = d.createCommandEncoder();
+    const enc = this._mkEncoder("forward");
     const C = (name, i, o, H, W, cin, cout, k, relu) => {
       const b = this.mkStorage(cout * H * W);
       this.conv(enc, name, i, b, H, W, cin, cout, k, relu);
@@ -494,7 +498,7 @@ export class StarDistWebGPU {
     d.queue.writeBuffer(keepB, 0, new Uint32Array(n).fill(1));   // 1 = survivor (kept for the CPU pass)
     const thrM = Math.round(safe * 1e6);                        // safe-coverage in ppm (uniform is u32)
 
-    const enc = d.createCommandEncoder();
+    const enc = this._mkEncoder("raster");
     enc.clearBuffer(ownerB); enc.clearBuffer(areaB);            // owner encodes n-rank, so 0 = unowned
     for (const mode of [0, 1]) {                                // 0: stamp owner+area; 1: drop near-dups
       const uni = this.uniform([n, Hp, Wp, mode, thrM]);
