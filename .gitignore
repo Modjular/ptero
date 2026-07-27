@@ -4,3 +4,7 @@
 node_modules
 __pycache__/
 *.pyc
+
+# Profiling artifacts. The tooling that produces (and reads) these now lives
+# upstream in webgpu-cellseg — see vendor/webgpu-cellseg/VENDOR.md.
+results/
