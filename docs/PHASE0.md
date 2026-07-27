@@ -1,5 +1,12 @@
 # Phase 0 — the accounting
 
+> **Superseded in part by [PHASE1.md](PHASE1.md).** Phase 1 acted on this document's
+> decision and rebuilt the conv kernel: 11× faster, bit-identical output, attainment
+> 3.5% → 35%, end-to-end 5.5×. The numbers below are the *pre-Phase-1* baseline and are
+> kept as the zero point of that waterfall. The method, the machine roofs and the three
+> refuted mechanisms all still stand; the top hypothesis in "Decision" was confirmed and
+> was worth 5× on its own.
+
 Where U-Net inference time actually goes, measured on WebGPU. This is the gate the
 throughput research programme has to pass before any architectural work starts.
 

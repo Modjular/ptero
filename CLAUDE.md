@@ -20,6 +20,7 @@ node tools/test_agent.mjs --only gemini                  # one provider
 
 node tools/profile.mjs                                   # Phase 0 throughput accounting
 node tools/profile.mjs --only composite --repeats 9      # one workload, more repeats
+node tools/convbench.mjs --shapes 4 --per-shape          # conv kernel variants
 ```
 
 Useful flags: `drive.mjs --headful --logs --keep` (`--keep` preserves the cells in
@@ -70,10 +71,19 @@ labels each op passes to `beginComputePass` are the contract between the engines
 `parseLabel()`; change them together. Nothing here is imported unless a profiling run asks
 for it.
 
+**The conv kernel is generated** (`src/conv-kernel.js`), one pipeline per K, with a 2×2
+spatial register block. All three numbers in it are measured optima, not taste — a 2×4
+block is *slower*. Re-run `tools/convbench.mjs` before changing any of them. The kernel it
+replaced is frozen in `src/profile/baseline-conv.js` as the benchmark's zero point; don't
+"clean it up" into an import of the current kernel or the waterfall loses its reference
+and the equivalence check compares the new kernel against itself.
+
 `docs/ARCHITECTURE.md` has the reasoning behind all of this and a longer gotcha list.
 Read it before changing architecture. `docs/PHASE0.md` is the throughput accounting and
 its gate decision — read it before optimising anything, because it says which 0.2% of the
-dispatches are not worth your time.
+dispatches are not worth your time. `docs/PHASE1.md` is what came of it (11× on the conv)
+and where the bottleneck went next: **`getmasks`, the single-threaded JS mask assembly, is
+now up to 79% of wall clock.** The network is no longer the thing to optimise.
 
 ## Things that will waste your time if you don't know them
 

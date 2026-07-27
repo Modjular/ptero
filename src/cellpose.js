@@ -17,99 +17,17 @@
 // Checkpoint cp001: naive shaders (one thread per output element), fresh
 // buffers per op, style readback mid-forward. Correctness first.
 
-// cp003/cp004: small-footprint shared-memory tiled conv (per input channel).
-// A 16×16 workgroup loads, per input channel, an 18×18 activated input tile +
-// this channel's BLK×K×K weight slab (~1.6KB shared, high occupancy) and all
-// 256 threads accumulate BLK output channels from shared memory.
-// (cp005's larger CHUNK tiling was reverted — it cut GPU occupancy.)
+// cp003/cp004: small-footprint shared-memory tiled conv, per input channel — a 16×16
+// workgroup loads an activated input tile plus a BLK×K×K weight slab into shared memory
+// and accumulates BLK output channels from there. (cp005's larger CHUNK tiling was
+// reverted; it cut occupancy.) Phase 1 kept that structure and fixed what was inside it.
 import { sharedDevice } from "./gpu.js";
 
-const BLK = 8;
-const TS = 16;          // tile side
-const TW = TS + 2;      // tile side incl. halo (max pad = 1 for K∈{1,3})
-const CONV_WGSL = /* wgsl */`
-const BLK = ${BLK}u;
-const TS  = ${TS}u;
-const TW  = ${TW}u;
-// cp007: 'addv' is summed into the input before BN (skip connection); 'resid'
-// is summed into the conv output (residual), fusing the elementwise residual-add
-// passes into the conv that produces them (16 fewer dispatches per forward).
-struct P { H:u32, W:u32, Cin:u32, Cout:u32, K:u32, pad:u32, useRelu:u32, useAdd:u32,
-           useResid:u32, _p0:u32, _p1:u32, _p2:u32 };
-@group(0) @binding(0) var<uniform> p: P;
-@group(0) @binding(1) var<storage,read>       inp:   array<f32>;
-@group(0) @binding(2) var<storage,read>       w:     array<f32>;
-@group(0) @binding(3) var<storage,read>       b:     array<f32>;
-@group(0) @binding(4) var<storage,read>       scale: array<f32>;
-@group(0) @binding(5) var<storage,read>       shift: array<f32>;
-@group(0) @binding(6) var<storage,read>       addv:  array<f32>;
-@group(0) @binding(8) var<storage,read>       resid: array<f32>;
-@group(0) @binding(7) var<storage,read_write> outp:  array<f32>;
-
-var<workgroup> tile: array<f32, TW * TW>;   // activated input tile for current ci
-var<workgroup> ws:   array<f32, BLK * 9u>;  // weight slab for current ci
-
-@compute @workgroup_size(16,16,1)
-fn main(@builtin(workgroup_id) wg: vec3<u32>,
-        @builtin(local_invocation_id) lid: vec3<u32>) {
-  let coBase = wg.z * BLK;
-  let nco = min(BLK, p.Cout - coBase);
-  let HW = p.H * p.W;
-  let K = p.K; let pad = i32(p.pad); let KK = K * K;
-  let x = wg.x * TS + lid.x;
-  let y = wg.y * TS + lid.y;
-  let lt = lid.y * TS + lid.x;              // 0..255 flat thread id
-  let ox = i32(wg.x * TS) - pad;            // tile origin (global) x
-  let oy = i32(wg.y * TS) - pad;
-
-  var acc: array<f32, BLK>;
-  for (var j = 0u; j < BLK; j = j + 1u) { acc[j] = b[coBase + min(j, nco - 1u)]; }
-
-  let tileN = TW * TW;
-  let wN = nco * KK;
-  let stride = p.Cin * KK;
-  for (var ci = 0u; ci < p.Cin; ci = ci + 1u) {
-    let base = ci * HW;
-    let sc = scale[ci]; let sh = shift[ci];
-    for (var i = lt; i < tileN; i = i + TS * TS) {
-      let ty = i / TW; let tx = i % TW;
-      let gy = oy + i32(ty); let gx = ox + i32(tx);
-      var v = 0.0;
-      if (gy >= 0 && gy < i32(p.H) && gx >= 0 && gx < i32(p.W)) {
-        let idx = base + u32(gy) * p.W + u32(gx);
-        v = inp[idx];
-        if (p.useAdd == 1u) { v = v + addv[idx]; }
-        v = v * sc + sh;
-        if (p.useRelu == 1u) { v = max(v, 0.0); }
-      }
-      tile[i] = v;
-    }
-    let wbase = ci * KK;
-    for (var i = lt; i < wN; i = i + TS * TS) {
-      let j = i / KK; let k = i % KK;
-      ws[i] = w[(coBase + j) * stride + wbase + k];
-    }
-    workgroupBarrier();
-    for (var ky = 0u; ky < K; ky = ky + 1u) {
-      for (var kx = 0u; kx < K; kx = kx + 1u) {
-        let v = tile[(lid.y + ky) * TW + (lid.x + kx)];
-        let k = ky * K + kx;
-        for (var j = 0u; j < nco; j = j + 1u) {
-          acc[j] = acc[j] + v * ws[j * KK + k];
-        }
-      }
-    }
-    workgroupBarrier();
-  }
-  if (x < p.W && y < p.H) {
-    for (var j = 0u; j < nco; j = j + 1u) {
-      let oi = (coBase + j) * HW + y * p.W + x;
-      var o = acc[j];
-      if (p.useResid == 1u) { o = o + resid[oi]; }
-      outp[oi] = o;
-    }
-  }
-}`;
+// The conv kernel is generated per kernel size in src/conv-kernel.js. Phase 1 rebuilt it
+// — 10.9x faster, bit-identical output, 3.5% → 37% of this machine's roof — and that file
+// documents why each piece is shaped the way it is. src/profile/baseline-conv.js keeps
+// the version it replaced, as the benchmark's zero point.
+import { convWGSL, convDispatch } from "./conv-kernel.js";
 
 const ADD_WGSL = /* wgsl */`
 struct P { N:u32, nwgx:u32 };
@@ -253,7 +171,10 @@ export class CellposeWebGPU {
     const mk = (code) => d.createComputePipeline({
       layout: "auto", compute: { module: d.createShaderModule({ code }), entryPoint: "main" }
     });
-    this.pConv = mk(CONV_WGSL);
+    // One conv pipeline per kernel size. K is a compile-time constant in the shader so
+    // the taps unroll and the weight addressing folds — worth 1.4x on its own, and the
+    // network only ever uses K∈{1,3}, so it costs two pipelines.
+    this.pConvK = new Map([[1, mk(convWGSL(1))], [3, mk(convWGSL(3))]]);
     this.pAdd = mk(ADD_WGSL);
     this.pPool = mk(POOL_WGSL);
     this.pUp = mk(UP_WGSL);
@@ -373,8 +294,10 @@ export class CellposeWebGPU {
   conv(enc, { inBuf, outBuf, H, W, Cin, Cout, K, relu, addBuf, residBuf, wBuf, bBuf, scaleBuf, shiftBuf, name }) {
     const uni = this.uniform([H, W, Cin, Cout, K, (K / 2) | 0, relu ? 1 : 0, addBuf ? 1 : 0,
       residBuf ? 1 : 0, 0, 0, 0]);
+    const pipe = this.pConvK.get(K);
+    if (!pipe) throw new Error(`no conv pipeline for K=${K} (built: ${[...this.pConvK.keys()]})`);
     const bg = this.device.createBindGroup({
-      layout: this.pConv.getBindGroupLayout(0), entries: [
+      layout: pipe.getBindGroupLayout(0), entries: [
         { binding: 0, resource: { buffer: uni } },
         { binding: 1, resource: { buffer: inBuf } },
         { binding: 2, resource: { buffer: wBuf } },
@@ -389,8 +312,11 @@ export class CellposeWebGPU {
     const flags = (relu ? "|relu" : "") + (addBuf ? "|add" : "") + (residBuf ? "|resid" : "");
     const pass = enc.beginComputePass({
       label: `conv|${name || "?"}|${Cin}->${Cout}|${H}x${W}|k${K}${flags}` });
-    pass.setPipeline(this.pConv); pass.setBindGroup(0, bg);
-    pass.dispatchWorkgroups(Math.ceil(W / 16), Math.ceil(H / 16), Math.ceil(Cout / BLK));
+    pass.setPipeline(pipe); pass.setBindGroup(0, bg);
+    // Each thread now covers an RBY x RBX block of output pixels, so the grid shrinks by
+    // that factor — convDispatch owns the arithmetic so it cannot drift from the shader.
+    const [gx, gy, gz] = convDispatch(H, W, Cout);
+    pass.dispatchWorkgroups(gx, gy, gz);
     pass.end();
   }
   add(enc, aBuf, bBuf, outBuf, N) {

@@ -25,7 +25,11 @@ export function sharedDevice() {
       // break every machine that lacks it. It downloads nothing and allocates nothing,
       // so holding it costs the ~5 MB cold start nothing; the query sets themselves are
       // only created when a profiling run asks for them.
-      const requiredFeatures = adapter.features.has("timestamp-query") ? ["timestamp-query"] : [];
+      // `shader-f16` is here for the same reason and on the same terms: it lets a kernel
+      // hold shared-memory tiles at half width. Both are feature-detected because
+      // requestDevice() rejects outright on an unavailable requiredFeature.
+      const requiredFeatures = ["timestamp-query", "shader-f16"]
+        .filter((f) => adapter.features.has(f));
       const device = await adapter.requestDevice({
         requiredFeatures,
         requiredLimits: {
