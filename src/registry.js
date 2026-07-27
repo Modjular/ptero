@@ -7,9 +7,11 @@
 //
 // Weights are fetched lazily, per model, on first use and cached forever after — a
 // session that only ever runs StarDist never downloads cyto3's 26 MB.
-import { CellposeWebGPU } from "./cellpose.js";
-import { StarDistWebGPU } from "./stardist.js";
-import { InstanSegWebGPU } from "./instanseg.js";
+// The engines are vendored from webgpu-cellseg — see vendor/webgpu-cellseg/VENDOR.md.
+// Don't edit them here; changes go upstream and come back through a re-sync.
+import { CellposeWebGPU } from "../vendor/webgpu-cellseg/src/cellpose.js";
+import { StarDistWebGPU } from "../vendor/webgpu-cellseg/src/stardist.js";
+import { InstanSegWebGPU } from "../vendor/webgpu-cellseg/src/instanseg.js";
 import { sharedDevice, adapterDescription } from "./gpu.js";
 
 // `input` is what the engine's segmentImage() wants:

@@ -17,87 +17,18 @@
 // is the cellpose tiled conv stripped of BN/skip/residual, with ReLU applied to
 // the conv *output* (StarDist is conv->ReLU, where cellpose folds BN pre-conv).
 
-import { sharedDevice } from "./gpu.js";
+import { requestDevice } from "./device.js";
+import { convWGSL, convDispatch, BLK, RBY, RBX, CB } from "./conv-kernel.js";
 
 const N_RAYS = 32;
-const BLK = 8;          // output channels accumulated per workgroup (register block)
-const TS = 16;          // tile side
-const TW = TS + 2;      // tile side incl. halo (max pad = 1 for K∈{1,3})
+// The conv kernel is shared with the other models (src/conv-kernel.js) in its "plain"
+// form — no BN, relu on the output. Everything that determines its throughput is tuned
+// once, by tools/convbench.mjs, for all three.
 
 // Shared-memory tiled conv (per input channel), same footprint as cellpose cp004
 // (~1.6 KB shared, high occupancy). A 16×16 workgroup loads, per input channel, an
 // 18×18 input tile + this channel's BLK×K×K weight slab, and all 256 threads
 // accumulate BLK output channels. `useRelu` clamps the output (post-conv ReLU).
-const CONV_WGSL = /* wgsl */`
-const BLK = ${BLK}u;
-const TS  = ${TS}u;
-const TW  = ${TW}u;
-struct P { H:u32, W:u32, Cin:u32, Cout:u32, K:u32, pad:u32, useRelu:u32, _p:u32 };
-@group(0) @binding(0) var<uniform> p: P;
-@group(0) @binding(1) var<storage,read>       inp:  array<f32>;
-@group(0) @binding(2) var<storage,read>       w:    array<f32>;
-@group(0) @binding(3) var<storage,read>       b:    array<f32>;
-@group(0) @binding(4) var<storage,read_write> outp: array<f32>;
-
-var<workgroup> tile: array<f32, TW * TW>;
-var<workgroup> ws:   array<f32, BLK * 9u>;
-
-@compute @workgroup_size(16,16,1)
-fn main(@builtin(workgroup_id) wg: vec3<u32>,
-        @builtin(local_invocation_id) lid: vec3<u32>) {
-  let coBase = wg.z * BLK;
-  let nco = min(BLK, p.Cout - coBase);
-  let HW = p.H * p.W;
-  let K = p.K; let pad = i32(p.pad); let KK = K * K;
-  let x = wg.x * TS + lid.x;
-  let y = wg.y * TS + lid.y;
-  let lt = lid.y * TS + lid.x;
-  let ox = i32(wg.x * TS) - pad;
-  let oy = i32(wg.y * TS) - pad;
-
-  var acc: array<f32, BLK>;
-  for (var j = 0u; j < BLK; j = j + 1u) { acc[j] = b[coBase + min(j, nco - 1u)]; }
-
-  let tileN = TW * TW;
-  let wN = nco * KK;
-  let stride = p.Cin * KK;
-  for (var ci = 0u; ci < p.Cin; ci = ci + 1u) {
-    let base = ci * HW;
-    for (var i = lt; i < tileN; i = i + TS * TS) {
-      let ty = i / TW; let tx = i % TW;
-      let gy = oy + i32(ty); let gx = ox + i32(tx);
-      var v = 0.0;
-      if (gy >= 0 && gy < i32(p.H) && gx >= 0 && gx < i32(p.W)) {
-        v = inp[base + u32(gy) * p.W + u32(gx)];
-      }
-      tile[i] = v;
-    }
-    let wbase = ci * KK;
-    for (var i = lt; i < wN; i = i + TS * TS) {
-      let j = i / KK; let k = i % KK;
-      ws[i] = w[(coBase + j) * stride + wbase + k];
-    }
-    workgroupBarrier();
-    for (var ky = 0u; ky < K; ky = ky + 1u) {
-      for (var kx = 0u; kx < K; kx = kx + 1u) {
-        let v = tile[(lid.y + ky) * TW + (lid.x + kx)];
-        let k = ky * K + kx;
-        for (var j = 0u; j < nco; j = j + 1u) {
-          acc[j] = acc[j] + v * ws[j * KK + k];
-        }
-      }
-    }
-    workgroupBarrier();
-  }
-  if (x < p.W && y < p.H) {
-    for (var j = 0u; j < nco; j = j + 1u) {
-      var o = acc[j];
-      if (p.useRelu == 1u) { o = max(o, 0.0); }
-      outp[(coBase + j) * HW + y * p.W + x] = o;
-    }
-  }
-}`;
-
 const POOL_WGSL = /* wgsl */`
 struct P { Ho:u32, Wo:u32, Hi:u32, Wi:u32, C:u32 };
 @group(0) @binding(0) var<uniform> p: P;
@@ -242,7 +173,11 @@ export class StarDistWebGPU {
     const mk = (code) => d.createComputePipeline({
       layout: "auto", compute: { module: d.createShaderModule({ code }), entryPoint: "main" }
     });
-    this.pConv = mk(CONV_WGSL);
+    // One conv pipeline per kernel size (K is compile-time in the kernel so the taps
+    // unroll). K∈{1,3} covers every checkpoint seen so far and is built here so shader
+    // compilation is not billed to the first forward; anything else is built on demand.
+    this._convPipes = new Map();
+    for (const K of [1, 3]) this._convPipe(K);
     this.pPool = mk(POOL_WGSL);
     this.pUp = mk(UP_WGSL);
     this.pRast = mk(RASTER_WGSL);
@@ -251,13 +186,9 @@ export class StarDistWebGPU {
     this._inUse = [];
   }
 
-  // Device is shared across every engine on the page — see gpu.js.
   static async create() {
-    return new StarDistWebGPU(await sharedDevice());
+    return new StarDistWebGPU(await requestDevice());
   }
-
-  // Profiling hook, same contract as CellposeWebGPU — see src/profile/timing.js.
-  _mkEncoder(label) { return this.device.createCommandEncoder({ label }); }
 
   loadWeights(manifest, binArrayBuffer) {
     this.manifest = manifest;
@@ -281,15 +212,14 @@ export class StarDistWebGPU {
   // Convenience loader: fetch manifest.json + weights.bin from a base URL and
   // return a ready instance. Default resolves to this repo's weights/stardist-fluo/
   // relative to this module; pass a CDN/HuggingFace base URL for production.
-  // Pass `device` to build on an already-acquired GPUDevice (what registry.js does).
   static async load(baseURL = new URL("../weights/stardist-fluo/", import.meta.url).href,
-                    { manifest = "manifest.json", weights = "weights.bin", device = null } = {}) {
+                    { manifest = "manifest.json", weights = "weights.bin" } = {}) {
     const base = baseURL.endsWith("/") ? baseURL : baseURL + "/";
     const [mf, bin] = await Promise.all([
       fetch(base + manifest).then(r => r.json()),
       fetch(base + weights).then(r => r.arrayBuffer()),
     ]);
-    const inst = device ? new this(device) : await this.create();
+    const inst = await this.create();
     inst.loadWeights(mf, bin);
     return inst;
   }
@@ -325,8 +255,9 @@ export class StarDistWebGPU {
   // ---- ops (record into encoder) ----
   conv(enc, name, inBuf, outBuf, H, W, Cin, Cout, K, relu) {
     const uni = this.uniform([H, W, Cin, Cout, K, (K / 2) | 0, relu ? 1 : 0, 0]);
+    const pipe = this._convPipe(K);
     const bg = this.device.createBindGroup({
-      layout: this.pConv.getBindGroupLayout(0), entries: [
+      layout: pipe.getBindGroupLayout(0), entries: [
         { binding: 0, resource: { buffer: uni } },
         { binding: 1, resource: { buffer: inBuf } },
         { binding: 2, resource: { buffer: this.buf[name + ".w"] } },
@@ -334,12 +265,37 @@ export class StarDistWebGPU {
         { binding: 4, resource: { buffer: outBuf } },
       ]
     });
+    // The label is the contract with src/profile/cost.js's parseLabel() — change them
+    // together. It also shows up in a devtools GPU capture.
     const pass = enc.beginComputePass({
       label: `conv|${name}|${Cin}->${Cout}|${H}x${W}|k${K}${relu ? "|relu" : ""}` });
-    pass.setPipeline(this.pConv); pass.setBindGroup(0, bg);
-    pass.dispatchWorkgroups(Math.ceil(W / 16), Math.ceil(H / 16), Math.ceil(Cout / BLK));
+    pass.setPipeline(pipe); pass.setBindGroup(0, bg);
+    const [gx, gy, gz] = convDispatch(H, W, Cout);
+    pass.dispatchWorkgroups(gx, gy, gz);
     pass.end();
   }
+
+  // K is a compile-time constant in the kernel so the taps unroll, so there is one
+  // pipeline per kernel size. Built on demand rather than up front: which sizes a
+  // checkpoint uses is a property of its weights, not of this class.
+  _convPipe(K) {
+    let pipe = this._convPipes.get(K);
+    if (!pipe) {
+      pipe = this.device.createComputePipeline({
+        layout: "auto",
+        compute: {
+          module: this.device.createShaderModule({ code: convWGSL(K, RBY, RBX, BLK, CB, "plain") }),
+          entryPoint: "main",
+        },
+      });
+      this._convPipes.set(K, pipe);
+    }
+    return pipe;
+  }
+
+  // Profiling hook — src/profile/timing.js substitutes this to time every compute pass.
+  _mkEncoder(label) { return this.device.createCommandEncoder({ label }); }
+
   pool(enc, inBuf, outBuf, Hi, Wi, C) {
     const Ho = Hi >> 1, Wo = Wi >> 1;
     const uni = this.uniform([Ho, Wo, Hi, Wi, C]);
@@ -350,7 +306,7 @@ export class StarDistWebGPU {
         { binding: 2, resource: { buffer: outBuf } },
       ]
     });
-    const pass = enc.beginComputePass({ label: `pool|${Hi}x${Wi}->${Ho}x${Wo}|C${C}` });
+    const pass = enc.beginComputePass();
     pass.setPipeline(this.pPool); pass.setBindGroup(0, bg);
     pass.dispatchWorkgroups(Math.ceil(Wo / 16), Math.ceil(Ho / 16), C);
     pass.end();
@@ -366,7 +322,7 @@ export class StarDistWebGPU {
         { binding: 2, resource: { buffer: outBuf } },
       ]
     });
-    const pass = enc.beginComputePass({ label: `up|${Hi}x${Wi}->${Ho}x${Wo}|C${C}` });
+    const pass = enc.beginComputePass();
     pass.setPipeline(this.pUp); pass.setBindGroup(0, bg);
     pass.dispatchWorkgroups(Math.ceil(Wo / 16), Math.ceil(Ho / 16), C);
     pass.end();

@@ -21,7 +21,7 @@
 // workgroup loads an activated input tile plus a BLK×K×K weight slab into shared memory
 // and accumulates BLK output channels from there. (cp005's larger CHUNK tiling was
 // reverted; it cut occupancy.) Phase 1 kept that structure and fixed what was inside it.
-import { sharedDevice } from "./gpu.js";
+import { requestDevice } from "./device.js";
 
 // The conv kernel is generated per kernel size in src/conv-kernel.js. Phase 1 rebuilt it
 // — 10.9x faster, bit-identical output, 3.5% → 37% of this machine's roof — and that file
@@ -295,10 +295,8 @@ export class CellposeWebGPU {
     this._inUse = [];        // buffers acquired during the current forward
   }
 
-  // The device is shared across every engine on the page (see gpu.js) — a page that
-  // uses two models gets two sets of pipelines, not two GPU devices.
   static async create() {
-    return new CellposeWebGPU(await sharedDevice());
+    return new CellposeWebGPU(await requestDevice());
   }
 
   loadWeights(manifest, binArrayBuffer) {
@@ -323,8 +321,8 @@ export class CellposeWebGPU {
   // the importing page lives). Pass a base URL — e.g. a HuggingFace or jsDelivr
   // URL — to load the weights from a CDN instead:
   //   const cp = await CellposeWebGPU.load("https://huggingface.co/<you>/cellpose-webgpu/resolve/main/cellpose-cyto3/");
-  // Pass `device` to build on an already-acquired GPUDevice (what registry.js does)
-  // instead of going through sharedDevice() again.
+  // Pass `device` to build on an already-acquired GPUDevice instead of requesting a
+  // second one — how a host shares a single device across several models.
   static async load(baseURL = new URL("../weights/cellpose-cyto3/", import.meta.url).href,
                     { manifest = "manifest.json", weights = "weights.bin", device = null } = {}) {
     const base = baseURL.endsWith("/") ? baseURL : baseURL + "/";

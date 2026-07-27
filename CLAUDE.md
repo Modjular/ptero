@@ -18,9 +18,6 @@ node tools/drive.mjs --stage demo/images/Composite.tif   # full notebook, real G
 node tools/test_agent.mjs                                # agent harness, both providers
 node tools/test_agent.mjs --only gemini                  # one provider
 
-node tools/profile.mjs                                   # Phase 0 throughput accounting
-node tools/profile.mjs --only composite --repeats 9      # one workload, more repeats
-node tools/convbench.mjs --shapes 4 --per-shape          # conv kernel variants
 ```
 
 Useful flags: `drive.mjs --headful --logs --keep` (`--keep` preserves the cells in
@@ -39,7 +36,7 @@ weights resident — if that number jumps, something started loading eagerly aga
 
 Four layers, each of which only knows about the one below it.
 
-**Engines** (`src/{cellpose,stardist,instanseg}.js`) — hand-written WGSL, no ML
+**Engines** (`vendor/webgpu-cellseg/src/{cellpose,stardist,instanseg}.js`) — hand-written WGSL, no ML
 framework. Uniform shape: `create()` → `loadWeights()` → `segmentImage() → {labels:
 Int32Array, timings}`. Treat these as near-frozen; they're validated against desktop
 references and the demo pages are their regression suite.
@@ -62,38 +59,25 @@ discovery surface the imitations can't provide.
 we own precisely because the agent acts on it directly; `push_to_ui` calls `insertCell`
 rather than faking a click.
 
-**`src/profile/` is measurement, not pipeline.** It attaches to an engine by substituting
-its `_mkEncoder` hook for one that wraps every compute pass in timestamp queries, so no op
-method knows profiling exists and the unprofiled path keeps its behaviour. Byte traffic
-and FLOPs are *derived from the shaders* in `cost.js` rather than counted — WebGPU has no
-DRAM or occupancy counters — which only works because the kernels are hand-written. The
-labels each op passes to `beginComputePass` are the contract between the engines and
-`parseLabel()`; change them together. Nothing here is imported unless a profiling run asks
-for it.
+**The engines are vendored, not ours to edit.** They live in
+`vendor/webgpu-cellseg/` and come from the `webgpu-cellseg` repo, which holds the PyTorch
+reference dumps and the fidelity harnesses that establish their numerics. Fix engine bugs
+and do kernel work *there*, then re-sync — `vendor/webgpu-cellseg/VENDOR.md` has the
+procedure and explains what ptero deliberately supplies instead (weights, and the shared
+device in `src/gpu.js`). Editing them here means the next re-sync silently reverts you.
 
-**The conv kernel is generated** (`src/conv-kernel.js`), one pipeline per K. Its four
-constants — BLK, TS, RBY/RBX, CB — are a *joint* measured optimum, interior on every axis,
-because they trade against two shared budgets: registers (BLK·RBY·RBX accumulators) and
-threadgroup memory (CB tiles). Raising any one of them loses, sometimes by half. Re-run
-`tools/convbench.mjs` before changing any of them; don't reason about one in isolation. The kernel it
-replaced is frozen in `src/profile/baseline-conv.js` as the benchmark's zero point; don't
-"clean it up" into an import of the current kernel or the waterfall loses its reference
-and the equivalence check compares the new kernel against itself.
+**One thing in `src/gpu.js` is load-bearing for the vendored kernel**:
+`maxComputeWorkgroupStorageSize` must be requested at the adapter maximum. The conv kernel
+stages several input channels per barrier round and does not fit in WebGPU's 16 KB
+default — it fails pipeline creation outright, which surfaces as an unrelated
+`getBindGroupLayout` error because pipeline limits fail through *asynchronous* validation.
+Keep it in step with `vendor/webgpu-cellseg/src/device.js`.
 
 `docs/ARCHITECTURE.md` has the reasoning behind all of this and a longer gotcha list.
-Read it before changing architecture. `docs/PHASE0.md` is the throughput accounting and
-its gate decision — read it before optimising anything, because it says which 0.2% of the
-dispatches are not worth your time. `docs/PHASE1.md` is what came of it — 11× on the
-conv, then 10× on the flow-consistency QC once that became the bottleneck, then a joint
-retune of the conv's three budgets, for **9.72× end-to-end** with the label maps unchanged. Read it before optimising: it records which
-levers are already pulled and which four are next.
-
-**Both rebuilt hot paths are exactness-verified, and that is the bar.** The conv is
-bit-identical to its predecessor; the GPU flow QC differs on 0 of 1.2M pixels. Neither was
-accepted on a tolerance — the flow QC in particular decides how many masks survive a
-threshold, so its diffusion runs in f32 but the normalisation and per-mask error stay on
-the CPU in f64 deliberately. Any change here gets the same treatment: run both
-implementations on the same input and diff the label maps.
+Read it before changing architecture. The engines' own performance record —
+why the conv kernel is shaped the way it is, and which levers are already pulled — is
+upstream in `webgpu-cellseg/docs/PHASE0.md` and `PHASE1.md`. Read those before attempting
+anything performance-related, in that repo rather than this one.
 
 ## Things that will waste your time if you don't know them
 

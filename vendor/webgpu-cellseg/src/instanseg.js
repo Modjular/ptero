@@ -14,56 +14,12 @@
 // residual/skip merges are elementwise adds (ADD_WGSL). Output = 2 coord fields +
 // 2 sigma + 1 seed channel; the decode grows one instance from each seed.
 
-import { sharedDevice } from "./gpu.js";
+import { requestDevice } from "./device.js";
+import { convWGSL, convDispatch, BLK, RBY, RBX, CB } from "./conv-kernel.js";
 
-const BLK = 8, TS = 16, TW = TS + 2;
+// The conv kernel is shared with the other models (src/conv-kernel.js) in its "plain"
+// form — no BN, relu on the output — so all three are tuned by one sweep.
 const N_COORD = 2, N_SIGMA = 2;
-
-const CONV_WGSL = /* wgsl */`
-const BLK = ${BLK}u; const TS = ${TS}u; const TW = ${TW}u;
-struct P { H:u32, W:u32, Cin:u32, Cout:u32, K:u32, pad:u32, useRelu:u32, _p:u32 };
-@group(0) @binding(0) var<uniform> p: P;
-@group(0) @binding(1) var<storage,read>       inp:  array<f32>;
-@group(0) @binding(2) var<storage,read>       w:    array<f32>;
-@group(0) @binding(3) var<storage,read>       b:    array<f32>;
-@group(0) @binding(4) var<storage,read_write> outp: array<f32>;
-var<workgroup> tile: array<f32, TW * TW>;
-var<workgroup> ws:   array<f32, BLK * 9u>;
-@compute @workgroup_size(16,16,1)
-fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
-  let coBase = wg.z * BLK; let nco = min(BLK, p.Cout - coBase); let HW = p.H * p.W;
-  let K = p.K; let pad = i32(p.pad); let KK = K * K;
-  let x = wg.x * TS + lid.x; let y = wg.y * TS + lid.y; let lt = lid.y * TS + lid.x;
-  let ox = i32(wg.x * TS) - pad; let oy = i32(wg.y * TS) - pad;
-  var acc: array<f32, BLK>;
-  for (var j = 0u; j < BLK; j = j + 1u) { acc[j] = b[coBase + min(j, nco - 1u)]; }
-  let tileN = TW * TW; let wN = nco * KK; let stride = p.Cin * KK;
-  for (var ci = 0u; ci < p.Cin; ci = ci + 1u) {
-    let base = ci * HW;
-    for (var i = lt; i < tileN; i = i + TS * TS) {
-      let ty = i / TW; let tx = i % TW; let gy = oy + i32(ty); let gx = ox + i32(tx);
-      var v = 0.0;
-      if (gy >= 0 && gy < i32(p.H) && gx >= 0 && gx < i32(p.W)) { v = inp[base + u32(gy) * p.W + u32(gx)]; }
-      tile[i] = v;
-    }
-    let wbase = ci * KK;
-    for (var i = lt; i < wN; i = i + TS * TS) { let j = i / KK; let k = i % KK; ws[i] = w[(coBase + j) * stride + wbase + k]; }
-    workgroupBarrier();
-    for (var ky = 0u; ky < K; ky = ky + 1u) {
-      for (var kx = 0u; kx < K; kx = kx + 1u) {
-        let v = tile[(lid.y + ky) * TW + (lid.x + kx)]; let k = ky * K + kx;
-        for (var j = 0u; j < nco; j = j + 1u) { acc[j] = acc[j] + v * ws[j * KK + k]; }
-      }
-    }
-    workgroupBarrier();
-  }
-  if (x < p.W && y < p.H) {
-    for (var j = 0u; j < nco; j = j + 1u) {
-      var o = acc[j]; if (p.useRelu == 1u) { o = max(o, 0.0); }
-      outp[(coBase + j) * HW + y * p.W + x] = o;
-    }
-  }
-}`;
 
 const POOL_WGSL = /* wgsl */`
 struct P { Ho:u32, Wo:u32, Hi:u32, Wi:u32, C:u32 };
@@ -112,12 +68,16 @@ export class InstanSegWebGPU {
     this.device = device;
     const mk = (code) => device.createComputePipeline({
       layout: "auto", compute: { module: device.createShaderModule({ code }), entryPoint: "main" } });
-    this.pConv = mk(CONV_WGSL); this.pPool = mk(POOL_WGSL); this.pUp = mk(UP_WGSL); this.pAdd = mk(ADD_WGSL);
+    // One conv pipeline per kernel size (K is compile-time in the kernel so the taps
+    // unroll). Built here rather than lazily so shader compilation is not billed to the
+    // first forward.
+    this._convPipes = new Map();
+    for (const K of [1, 3]) this._convPipe(K);
+    this.pPool = mk(POOL_WGSL); this.pUp = mk(UP_WGSL); this.pAdd = mk(ADD_WGSL);
     this.buf = {}; this._pool = new Map(); this._inUse = [];
   }
-  // Device is shared across every engine on the page — see gpu.js.
   static async create() {
-    return new InstanSegWebGPU(await sharedDevice());
+    return new InstanSegWebGPU(await requestDevice());
   }
   loadWeights(manifest, binArrayBuffer) {
     this.manifest = manifest; this.tensors = manifest.tensors; this.relu = manifest.relu;
@@ -137,15 +97,14 @@ export class InstanSegWebGPU {
   // return a ready instance. Default resolves to this repo's
   // weights/instanseg-brightfield/ relative to this module; pass a CDN/HuggingFace
   // base URL for production.
-  // Pass `device` to build on an already-acquired GPUDevice (what registry.js does).
   static async load(baseURL = new URL("../weights/instanseg-brightfield/", import.meta.url).href,
-                    { manifest = "manifest.json", weights = "weights.bin", device = null } = {}) {
+                    { manifest = "manifest.json", weights = "weights.bin" } = {}) {
     const base = baseURL.endsWith("/") ? baseURL : baseURL + "/";
     const [mf, bin] = await Promise.all([
       fetch(base + manifest).then(r => r.json()),
       fetch(base + weights).then(r => r.arrayBuffer()),
     ]);
-    const inst = device ? new this(device) : await this.create();
+    const inst = await this.create();
     inst.loadWeights(mf, bin);
     return inst;
   }
@@ -169,13 +128,36 @@ export class InstanSegWebGPU {
   conv(enc, tag, inBuf, outBuf, H, W, Cin, Cout, relu) {
     const K = this.K[tag];
     const uni = this.uniform([H, W, Cin, Cout, K, (K / 2) | 0, relu ? 1 : 0, 0]);
-    const bg = this.device.createBindGroup({ layout: this.pConv.getBindGroupLayout(0), entries: [
+    const pipe = this._convPipe(K);
+    const bg = this.device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
       { binding: 0, resource: { buffer: uni } }, { binding: 1, resource: { buffer: inBuf } },
       { binding: 2, resource: { buffer: this.buf[tag + ".w"] } }, { binding: 3, resource: { buffer: this.buf[tag + ".b"] } },
       { binding: 4, resource: { buffer: outBuf } } ] });
-    const pass = enc.beginComputePass(); pass.setPipeline(this.pConv); pass.setBindGroup(0, bg);
-    pass.dispatchWorkgroups(Math.ceil(W / 16), Math.ceil(H / 16), Math.ceil(Cout / BLK)); pass.end();
+    // The label is the contract with src/profile/cost.js's parseLabel().
+    const pass = enc.beginComputePass({
+      label: `conv|${tag}|${Cin}->${Cout}|${H}x${W}|k${K}${relu ? "|relu" : ""}` });
+    pass.setPipeline(pipe); pass.setBindGroup(0, bg);
+    const [gx, gy, gz] = convDispatch(H, W, Cout);
+    pass.dispatchWorkgroups(gx, gy, gz); pass.end();
   }
+
+  _convPipe(K) {
+    let pipe = this._convPipes.get(K);
+    if (!pipe) {
+      pipe = this.device.createComputePipeline({
+        layout: "auto",
+        compute: {
+          module: this.device.createShaderModule({ code: convWGSL(K, RBY, RBX, BLK, CB, "plain") }),
+          entryPoint: "main",
+        },
+      });
+      this._convPipes.set(K, pipe);
+    }
+    return pipe;
+  }
+
+  // Profiling hook — src/profile/timing.js substitutes this to time every compute pass.
+  _mkEncoder(label) { return this.device.createCommandEncoder({ label }); }
   pool(enc, inBuf, outBuf, Hi, Wi, C) {
     const Ho = Hi >> 1, Wo = Wi >> 1; const uni = this.uniform([Ho, Wo, Hi, Wi, C]);
     const bg = this.device.createBindGroup({ layout: this.pPool.getBindGroupLayout(0), entries: [
@@ -231,7 +213,7 @@ export class InstanSegWebGPU {
   async forwardFromInput(inputF32, Hp, Wp) {
     const d = this.device;
     const inBuf = this.mkStorage(3 * Hp * Wp); d.queue.writeBuffer(inBuf, 0, inputF32);
-    const enc = d.createCommandEncoder();
+    const enc = this._mkEncoder("forward");
     const e0 = this.encBlock(enc, 0, inBuf, 3, 32, Hp, Wp, false);
     const e1 = this.encBlock(enc, 1, e0.buf, 32, 64, e0.h, e0.w, true);
     const e2 = this.encBlock(enc, 2, e1.buf, 64, 128, e1.h, e1.w, true);

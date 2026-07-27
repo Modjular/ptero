@@ -73,7 +73,7 @@
   </div>
 </main>
 <script type="module">
-import { CellposeWebGPU } from "../src/cellpose.js";
+import { CellposeWebGPU } from "../vendor/webgpu-cellseg/src/cellpose.js";
 import { loadSource, meanPlane } from "./tiff-loader.js";
 
 const SAMPLES = ["cellpose_image_020", "cellpose_img_003", "cellpose_img_075"];
@@ -150,7 +150,8 @@ function showInput(g, W, H) {
 async function init() {
   try {
     log("fetching weights…");
-    cp = await CellposeWebGPU.load();   // default: ../weights/cellpose-cyto3/ (pass a URL for a CDN)
+    // Weights live in ptero's weights/, not next to the vendored engine — pass the URL.
+    cp = await CellposeWebGPU.load(new URL("../weights/cellpose-cyto3/", import.meta.url).href);
     log("ready. pick an image and Segment.");
     $("run").disabled = false;
     if (SAMPLES.length) { $("img").value = SAMPLES[0]; await preview(SAMPLES[0]); }

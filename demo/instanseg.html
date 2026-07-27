@@ -71,7 +71,7 @@
   </div>
 </main>
 <script type="module">
-import { InstanSegWebGPU } from "../src/instanseg.js";
+import { InstanSegWebGPU } from "../vendor/webgpu-cellseg/src/instanseg.js";
 import { loadSource } from "./tiff-loader.js";
 
 const SAMPLES = ["cellpose_img_003", "cellpose_image_020", "cellpose_img_075"];
@@ -168,7 +168,8 @@ function showInput(source) {
 async function init() {
   try {
     log("fetching weights…");
-    is = await InstanSegWebGPU.load();   // default: ../weights/instanseg-brightfield/ (pass a URL for a CDN)
+    // Weights live in ptero's weights/, not next to the vendored engine — pass the URL.
+    is = await InstanSegWebGPU.load(new URL("../weights/instanseg-brightfield/", import.meta.url).href);
     log("ready. pick an image and Segment.");
     $("run").disabled = false;
     if (SAMPLES.length) {
