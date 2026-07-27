@@ -103,26 +103,85 @@ This is exactly the Amdahl warning the report raises in §4.7 for Cellpose
 post-processing, arriving one phase later than it predicted and on the CPU rather than
 the GPU.
 
+## Phase 1b — the flow-consistency QC
+
+Acting on item 1 below, which the numbers above made unavoidable.
+
+Sub-stage timing inside `getmasks` put **95% of it in one place**: `_maskFlowErrors`, the
+flow-consistency check. Histogram, seed finding and seed growth were 13 ms combined
+against 1097 ms for the flow reconstruction.
+
+It works by reconstructing each mask's flow field — a 9-point diffusion from a heat source
+at the mask's centre, run for `2*(ly+lx)` iterations over the mask's own footprint — and
+comparing the gradient against the network's prediction. For 190 masks at ~100 px that is
+on the order of a billion stencil evaluations in single-threaded JS.
+
+Two changes:
+
+| step | flow QC | what changed |
+|---|---|---|
+| before | 1097 ms | |
+| precomputed flat indices | 852 ms | **1.29×**, bit-exact — nine taps off one base by addition instead of three multiplies and two typed-array loads per pixel per iteration |
+| GPU diffusion | 101 ms | **8.2×** on top; every mask diffused at once over the whole image |
+
+The global formulation is equivalent to the per-mask one given two details, both of which
+are easy to get wrong and are commented in `FLOWDIFF_WGSL`:
+
+- **Neighbours are label-masked.** Per-mask, positions outside the footprint stay zero
+  forever. Globally, a neighbour belonging to a *different* mask holds that mask's heat,
+  so it must read as zero — otherwise adjacent cells bleed into each other.
+- **The heat source is folded into the read.** `T[med] += 1` at the top of each iteration
+  accumulates into the field; adding 1 to the centre pixel's value as it is read is
+  algebraically the same thing.
+
+Each mask keeps its own iteration count and freezes individually once it reaches it, so
+the dispatch loop runs to the maximum without changing any mask's result. The diffusion
+runs in f32, but normalisation and the per-mask error stay on the CPU in f64 — the
+threshold comparison that decides how many masks survive is never made on f32 sums.
+
+**Verified by direct comparison, not by a tolerance:** both implementations were run on
+identical copies of the same raw label map. cyto channel — 190 masks vs 190, **0 of
+1,228,800 pixels differ**, 826 ms → 101 ms. Nuclear channel — 183 vs 183, **0 pixels
+differ**, 82 ms → 56 ms. The nuclear channel gains less because its masks are small and
+the kernel still dispatches over the whole image regardless.
+
+## Where it ended up
+
+| workload | original | after conv | after flow QC | total |
+|---|---|---|---|---|
+| single_tile 208² | 346 ms | 71 ms | 48 ms | **7.24×** |
+| composite 1280×960 d100 | 3069 ms | 1340 ms | 366 ms | **8.38×** |
+| cellpose_020 881×1001 | 9806 ms | 1427 ms | 1048 ms | **9.36×** |
+| cellpose_020 d15 440² | 7955 ms | 992 ms | 850 ms | **9.36×** |
+| **total** | **21177 ms** | 3830 ms | **2312 ms** | **9.16×** |
+
+**Gate A passes on all four workloads again** — `composite` went from 15.0% GPU back to
+68.2%, and `getmasks` from 79% of wall clock to 28%. The bottleneck is back on the GPU,
+which is where the remaining levers are.
+
+Correctness unchanged throughout: 190 / 183 / 173, all three demo pages, shims.
+
 ## Next, in order
 
-1. **`getmasks`, not the network.** It is now the largest single line item on two of four
-   workloads and 79% on one. Nothing in the network can beat it: at `composite`'s split,
-   an *infinitely fast* GPU would buy 15%. This is a GPU-port or worker-parallelism
-   problem, not an architecture one.
-2. **Traffic amplification in the conv** (Phase 1b). 21.9% of below-roof time and rising
-   as the kernel improves. The fix is standard: block over input channels so the input
-   tile is loaded once per output-channel group rather than once per group per channel.
-3. **`subgroup-matrix`** — Metal simdgroup matmul, available on this adapter and still
+1. **StarDist and InstanSeg still carry the old kernel** and the old 4.6% attainment. The
+   Phase 1 findings transfer directly — same 16×16 / BLK=8 shape, same dynamically-indexed
+   accumulator — so this is mechanical work with a known ~10× waiting at the end of it.
+   Cheapest remaining win by a wide margin.
+2. **Traffic amplification in the conv.** 12–22% of below-roof time and rising as the
+   kernel improves. The fix is standard: block over input channels so the activation tile
+   is loaded once per output-channel group rather than once per group per channel.
+3. **The flow-QC kernel dispatches over the whole image** regardless of how much of it is
+   masked, which is why the nuclear channel only gained 1.5× against the cyto channel's
+   8.2×. Bounding the dispatch to the union of mask bounding boxes, or compacting mask
+   pixels into a dense list, would recover that.
+4. **`subgroup-matrix`** — Metal simdgroup matmul, available on this adapter and still
    unused. This is the lever that would take the conv from 37% toward the roof, and it is
    a real rewrite (implicit GEMM with im2col in shared memory), so it deserves its own
    phase rather than being squeezed in here.
-4. **Re-test f16** properly, against reference agreement rather than a tolerance.
-5. **StarDist and InstanSeg still have the old kernel** and the old 4.6% attainment. The
-   Phase 1 findings transfer directly — same 16×16/BLK=8 shape, same dynamically-indexed
-   accumulator — so this is mechanical, and StarDist is 1037 ms of the cross-check.
+5. **Re-test f16** properly, against reference agreement rather than a tolerance.
 
-Architectural work (H1/H2/H3 in the report) remains gated behind Gate B and is now
-*third* in line behind two cheaper, better-evidenced targets.
+Architectural work (H1/H2/H3 in the report) remains gated behind Gate B and is now fifth
+in line behind four cheaper, better-evidenced targets.
 
 ## Caveats
 

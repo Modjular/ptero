@@ -1,5 +1,5 @@
 {
-  "roofGflops": 3108.005868712346,
+  "roofGflops": 3107.935024487386,
   "rows": [
     {
       "variant": "baseline",
@@ -11,13 +11,13 @@
         "K": 3,
         "share": 0.241
       },
-      "ns": 10346827,
-      "gflops": 89.38431385776528,
+      "ns": 10357451,
+      "gflops": 89.29262923860321,
       "ok": true,
       "maxAbs": 0,
       "maxRel": 0,
       "workgroups": 128,
-      "attainment": 0.02875937743798322,
+      "attainment": 0.02873053282487168,
       "speedup": 1
     },
     {
@@ -30,33 +30,14 @@
         "K": 3,
         "share": 0.241
       },
-      "ns": 993080,
-      "gflops": 931.2885487574013,
+      "ns": 1010037,
+      "gflops": 915.6536166496871,
       "ok": true,
       "maxAbs": 0,
       "maxRel": 0,
       "workgroups": 32,
-      "attainment": 0.29964182440338705,
-      "speedup": 10.41892596769646
-    },
-    {
-      "variant": "regblk_2x2",
-      "shape": {
-        "Cin": 256,
-        "Cout": 256,
-        "H": 28,
-        "W": 28,
-        "K": 3,
-        "share": 0.241
-      },
-      "ns": 996871,
-      "gflops": 927.746952213476,
-      "ok": true,
-      "maxAbs": 0,
-      "maxRel": 0,
-      "workgroups": 32,
-      "attainment": 0.29850231672755617,
-      "speedup": 10.379303841720745
+      "attainment": 0.2946180050211032,
+      "speedup": 10.254526319332856
     },
     {
       "variant": "baseline",
@@ -68,13 +49,13 @@
         "K": 3,
         "share": 0.201
       },
-      "ns": 10019125,
-      "gflops": 92.30786440931718,
+      "ns": 10023125,
+      "gflops": 92.2710264513313,
       "ok": true,
       "maxAbs": 0,
       "maxRel": 0,
       "workgroups": 256,
-      "attainment": 0.02970002899240359,
+      "attainment": 0.0296888531209079,
       "speedup": 1
     },
     {
@@ -87,33 +68,14 @@
         "K": 3,
         "share": 0.201
       },
-      "ns": 825934,
-      "gflops": 1119.755370283824,
+      "ns": 827517,
+      "gflops": 1117.6133324149232,
       "ok": true,
       "maxAbs": 0,
       "maxRel": 0,
       "workgroups": 64,
-      "attainment": 0.36028097036629514,
-      "speedup": 12.1306605612555
-    },
-    {
-      "variant": "regblk_2x2",
-      "shape": {
-        "Cin": 128,
-        "Cout": 128,
-        "H": 56,
-        "W": 56,
-        "K": 3,
-        "share": 0.201
-      },
-      "ns": 826225,
-      "gflops": 1119.3609876244363,
-      "ok": true,
-      "maxAbs": 0,
-      "maxRel": 0,
-      "workgroups": 64,
-      "attainment": 0.36015407785835046,
-      "speedup": 12.126388090411208
+      "attainment": 0.3595999670550575,
+      "speedup": 12.11228893182859
     },
     {
       "variant": "baseline",
@@ -125,13 +87,13 @@
         "K": 3,
         "share": 0.152
       },
-      "ns": 7605560,
-      "gflops": 121.60104344716234,
+      "ns": 7627351,
+      "gflops": 121.25363471538152,
       "ok": true,
       "maxAbs": 0,
       "maxRel": 0,
       "workgroups": 392,
-      "attainment": 0.03912510097593282,
+      "attainment": 0.03901421160996786,
       "speedup": 1
     },
     {
@@ -144,90 +106,14 @@
         "K": 3,
         "share": 0.152
       },
-      "ns": 776393,
-      "gflops": 1191.206041270336,
+      "ns": 779643,
+      "gflops": 1186.240410033823,
       "ok": true,
       "maxAbs": 0,
       "maxRel": 0,
       "workgroups": 128,
-      "attainment": 0.38327020333583073,
-      "speedup": 9.796018253642163
-    },
-    {
-      "variant": "regblk_2x2",
-      "shape": {
-        "Cin": 64,
-        "Cout": 64,
-        "H": 112,
-        "W": 112,
-        "K": 3,
-        "share": 0.152
-      },
-      "ns": 780851,
-      "gflops": 1184.4052604145988,
-      "ok": true,
-      "maxAbs": 0,
-      "maxRel": 0,
-      "workgroups": 128,
-      "attainment": 0.3810820540391388,
-      "speedup": 9.740091259408004
-    },
-    {
-      "variant": "baseline",
-      "shape": {
-        "Cin": 32,
-        "Cout": 32,
-        "H": 224,
-        "W": 224,
-        "K": 3,
-        "share": 0.15
-      },
-      "ns": 7462772,
-      "gflops": 123.92768156390146,
-      "ok": true,
-      "maxAbs": 0,
-      "maxRel": 0,
-      "workgroups": 784,
-      "attainment": 0.039873696125047854,
-      "speedup": 1
-    },
-    {
-      "variant": "shipping",
-      "shape": {
-        "Cin": 32,
-        "Cout": 32,
-        "H": 224,
-        "W": 224,
-        "K": 3,
-        "share": 0.15
-      },
-      "ns": 611981,
-      "gflops": 1511.229976094029,
-      "ok": true,
-      "maxAbs": 0,
-      "maxRel": 0,
-      "workgroups": 196,
-      "attainment": 0.4862378129035307,
-      "speedup": 12.194450481305791
-    },
-    {
-      "variant": "regblk_2x2",
-      "shape": {
-        "Cin": 32,
-        "Cout": 32,
-        "H": 224,
-        "W": 224,
-        "K": 3,
-        "share": 0.15
-      },
-      "ns": 607648,
-      "gflops": 1522.0062141239664,
-      "ok": true,
-      "maxAbs": 0,
-      "maxRel": 0,
-      "workgroups": 196,
-      "attainment": 0.48970506440984846,
-      "speedup": 12.281406340512929
+      "attainment": 0.3816812129878675,
+      "speedup": 9.783132792829539
     }
   ],
   "summary": [
@@ -237,8 +123,8 @@
       "covers": 1,
       "allOk": true,
       "failures": [],
-      "weightedGflops": 103.72044519428506,
-      "weightedAttainment": 0.03337202359828769,
+      "weightedGflops": 98.4790445117154,
+      "weightedAttainment": 0.03168632668823515,
       "projectedSpeedup": 1
     },
     {
@@ -247,19 +133,9 @@
       "covers": 1,
       "allOk": true,
       "failures": [],
-      "weightedGflops": 1152.2300865117982,
-      "weightedAttainment": 0.3707297010314752,
-      "projectedSpeedup": 11.019324081965701
-    },
-    {
-      "variant": "regblk_2x2",
-      "what": "H2: + 2x2 register block (32 accumulators)",
-      "covers": 1,
-      "allOk": true,
-      "failures": [],
-      "weightedGflops": 1151.7595506687815,
-      "weightedAttainment": 0.3705783062584621,
-      "projectedSpeedup": 11.003655565998535
+      "weightedGflops": 1053.234585442955,
+      "weightedAttainment": 0.33888565145169747,
+      "projectedSpeedup": 10.677024225039913
     }
   ]
 }

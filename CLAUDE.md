@@ -81,9 +81,17 @@ and the equivalence check compares the new kernel against itself.
 `docs/ARCHITECTURE.md` has the reasoning behind all of this and a longer gotcha list.
 Read it before changing architecture. `docs/PHASE0.md` is the throughput accounting and
 its gate decision — read it before optimising anything, because it says which 0.2% of the
-dispatches are not worth your time. `docs/PHASE1.md` is what came of it (11× on the conv)
-and where the bottleneck went next: **`getmasks`, the single-threaded JS mask assembly, is
-now up to 79% of wall clock.** The network is no longer the thing to optimise.
+dispatches are not worth your time. `docs/PHASE1.md` is what came of it — 11× on the
+conv, then 10× on the flow-consistency QC once that became the bottleneck, for **9.16×
+end-to-end** with the label maps unchanged. Read it before optimising: it records which
+levers are already pulled and which four are next.
+
+**Both rebuilt hot paths are exactness-verified, and that is the bar.** The conv is
+bit-identical to its predecessor; the GPU flow QC differs on 0 of 1.2M pixels. Neither was
+accepted on a tolerance — the flow QC in particular decides how many masks survive a
+threshold, so its diffusion runs in f32 but the normalisation and per-mask error stay on
+the CPU in f64 deliberately. Any change here gets the same treatment: run both
+implementations on the same input and diff the label maps.
 
 ## Things that will waste your time if you don't know them
 

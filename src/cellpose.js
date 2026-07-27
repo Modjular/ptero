@@ -122,6 +122,95 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) li: 
   pos[i] = py; pos[p.npts + i] = px;
 }`;
 
+// Flow-consistency QC, on the GPU.
+//
+// cellpose's remove_bad_flow_masks reconstructs each mask's flow field by running a
+// 9-point diffusion from a heat source at the mask's centre pixel, then compares the
+// gradient of that field against the network's predicted flow. Phase 1 measurement
+// (docs/PHASE1.md) found this single step at 95% of mask assembly and 72% of total wall
+// clock once the conv kernel got 11x faster — by far the largest remaining line item.
+//
+// The CPU version runs one mask at a time over its own bounding box. This runs every
+// mask at once over the whole image, which is equivalent given two details:
+//
+//   - **Neighbours are label-masked.** Per-mask, the diffusion field is sized to one
+//     bounding box and positions outside the mask footprint stay zero forever. Globally,
+//     a neighbouring pixel of a *different* mask holds that mask's heat, so it must be
+//     read as zero. Without this two adjacent cells bleed into each other.
+//   - **The source is folded into the read.** The CPU version does `T[med] += 1` at the
+//     top of each iteration, so the increment accumulates into the field. Adding 1 to the
+//     centre pixel's value as it is read is algebraically the same thing: the new centre
+//     value already contains the increment, and the next iteration adds another.
+//
+// Each mask runs its own iteration count (2*(ly+lx)), so masks freeze individually once
+// they reach it and the dispatch loop runs to the maximum. Freezing is per label and
+// neighbours are same-label by construction, so no mask ever reads a half-frozen one.
+const FLOWDIFF_WGSL = /* wgsl */`
+struct P { H:u32, W:u32, t:i32, _p:u32 };
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage,read>       labels: array<i32>;
+@group(0) @binding(2) var<storage,read>       niter:  array<i32>;
+@group(0) @binding(3) var<storage,read>       med:    array<i32>;
+@group(0) @binding(4) var<storage,read>       Tin:    array<f32>;
+@group(0) @binding(5) var<storage,read_write> Tout:   array<f32>;
+
+fn samp(x: i32, y: i32, l: i32, m: i32) -> f32 {
+  if (x < 0 || x >= i32(p.W) || y < 0 || y >= i32(p.H)) { return 0.0; }
+  let n = y * i32(p.W) + x;
+  if (labels[n] != l) { return 0.0; }   // a different mask's heat is not ours to read
+  var v = Tin[n];
+  if (n == m) { v = v + 1.0; }          // the heat source, folded into the read
+  return v;
+}
+
+@compute @workgroup_size(16,16,1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  if (gid.x >= p.W || gid.y >= p.H) { return; }
+  let i = i32(gid.y * p.W + gid.x);
+  let l = labels[i];
+  if (l <= 0) { Tout[i] = 0.0; return; }
+  if (p.t >= niter[l]) { Tout[i] = Tin[i]; return; }
+  let x = i32(gid.x); let y = i32(gid.y);
+  let m = med[l];
+  // Summation order matches the CPU implementation tap for tap.
+  let s = samp(x, y, l, m)
+        + samp(x, y - 1, l, m) + samp(x, y + 1, l, m)
+        + samp(x - 1, y, l, m) + samp(x + 1, y, l, m)
+        + samp(x - 1, y - 1, l, m) + samp(x + 1, y - 1, l, m)
+        + samp(x - 1, y + 1, l, m) + samp(x + 1, y + 1, l, m);
+  Tout[i] = s / 9.0;
+}`;
+
+// Central difference of the diffused field, label-masked for the same reason as above.
+// Normalisation and the per-mask error stay on the CPU in f64: they are O(HW) and cheap,
+// and keeping them in double means the threshold comparison that decides how many masks
+// survive is not made on f32 sums.
+const FLOWGRAD_WGSL = /* wgsl */`
+struct P { H:u32, W:u32, t:i32, _p:u32 };
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage,read>       labels: array<i32>;
+@group(0) @binding(4) var<storage,read>       T:      array<f32>;
+@group(0) @binding(5) var<storage,read_write> grad:   array<f32>;
+
+fn g(x: i32, y: i32, l: i32) -> f32 {
+  if (x < 0 || x >= i32(p.W) || y < 0 || y >= i32(p.H)) { return 0.0; }
+  let n = y * i32(p.W) + x;
+  if (labels[n] != l) { return 0.0; }
+  return T[n];
+}
+
+@compute @workgroup_size(16,16,1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  if (gid.x >= p.W || gid.y >= p.H) { return; }
+  let i = i32(gid.y * p.W + gid.x);
+  let HW = i32(p.H * p.W);
+  let l = labels[i];
+  if (l <= 0) { grad[i] = 0.0; grad[HW + i] = 0.0; return; }
+  let x = i32(gid.x); let y = i32(gid.y);
+  grad[i]      = g(x, y + 1, l) - g(x, y - 1, l);
+  grad[HW + i] = g(x + 1, y, l) - g(x - 1, y, l);
+}`;
+
 // cp006: L2-normalize the style vector on the GPU (one workgroup reduction),
 // so the forward no longer stalls on a CPU readback mid-pass.
 const NORMSTYLE_WGSL = /* wgsl */`
@@ -182,6 +271,25 @@ export class CellposeWebGPU {
     this.pSteps = mk(STEPS_WGSL);
     this.pNorm = mk(NORMSTYLE_WGSL);
     this.pProj = mk(STYLEPROJ_WGSL);
+    // The flow-QC diffusion runs one dispatch per iteration inside a single encoder, and
+    // each needs its own `t`. An explicit layout with a dynamic offset lets all of them
+    // share one uniform buffer, which is why these two can't use `mk`'s auto layout.
+    this._flowLayout = d.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+        { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+        { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+      ],
+    });
+    const flowPl = d.createPipelineLayout({ bindGroupLayouts: [this._flowLayout] });
+    const mkFlow = (code) => d.createComputePipeline({
+      layout: flowPl, compute: { module: d.createShaderModule({ code }), entryPoint: "main" },
+    });
+    this.pFlowDiff = mkFlow(FLOWDIFF_WGSL);
+    this.pFlowGrad = mkFlow(FLOWGRAD_WGSL);
     this.buf = {};        // static weight buffers by name
     this._pool = new Map();  // free-list keyed by usage:size
     this._inUse = [];        // buffers acquired during the current forward
@@ -656,7 +764,8 @@ export class CellposeWebGPU {
     this._stage("dyn_wait", mDyn);
     const py = posF.subarray(0, npts), px = posF.subarray(npts, 2 * npts);
     const mMasks = this._mark();
-    const labels = this._getMasks(py, px, ys, xs, dy, dx, H, W, rpad, min_size, flow_threshold);
+    const raw = this._getMasks(py, px, ys, xs, dy, dx, H, W, rpad, min_size, flow_threshold);
+    const labels = await this._filterMasksGPU(raw, dy, dx, H, W, min_size, flow_threshold);
     this._stage("getmasks", mMasks);
     return labels;
   }
@@ -689,10 +798,12 @@ export class CellposeWebGPU {
         py[i] = ny; px[i] = nx;
       }
     }
-    return this._getMasks(py, px, ys, xs, dy, dx, H, W, rpad, min_size, flow_threshold);
+    const raw = this._getMasks(py, px, ys, xs, dy, dx, H, W, rpad, min_size, flow_threshold);
+    return this._filterMasks(raw, dy, dx, H, W, min_size, flow_threshold);
   }
 
   _getMasks(py, px, ys, xs, dy, dx, H, W, rpad, min_size, flow_threshold) {
+    const mHist = this._mark();
     const npts = py.length;
     const Hh = H + 2 * rpad, Ww = W + 2 * rpad;
     // integer final positions (trunc) + rpad, clamp to [0, shape0+rpad-1]
@@ -706,7 +817,9 @@ export class CellposeWebGPU {
     // histogram
     const h1 = new Int32Array(Hh * Ww);
     for (let i = 0; i < npts; i++) h1[pty[i] * Ww + ptx[i]]++;
+    this._stage("gm_hist", mHist);
     // local maxima in 5x5 with count>10
+    const mSeeds = this._mark();
     const seeds = [];
     for (let y = 0; y < Hh; y++) for (let x = 0; x < Ww; x++) {
       const c = h1[y * Ww + x];
@@ -723,8 +836,10 @@ export class CellposeWebGPU {
     }
     if (seeds.length === 0) return new Int32Array(H * W);
     seeds.sort((a, b) => a[2] - b[2]); // ascending count; later (bigger) wins overlaps
+    this._stage("gm_seeds", mSeeds);
 
     // grow each seed within 11x11 window: 5 iters dilate(3x3) & (h_slc>2)
+    const mGrow = this._mark();
     const M1 = new Int32Array(Hh * Ww);
     for (let k = 0; k < seeds.length; k++) {
       const [sy, sx] = seeds[k];
@@ -755,12 +870,15 @@ export class CellposeWebGPU {
         }
       }
     }
+    this._stage("gm_grow", mGrow);
     // assign each pixel the label of its final bucket
     const labels = new Int32Array(H * W);
     for (let i = 0; i < npts; i++) {
       labels[ys[i] * W + xs[i]] = M1[pty[i] * Ww + ptx[i]];
     }
-    return this._filterMasks(labels, dy, dx, H, W, min_size, flow_threshold);
+    // The caller filters: the GPU flow-QC path is async and the plain computeMasks()
+    // entry point must stay synchronous, so _getMasks stops at the raw label map.
+    return labels;
   }
 
   // Port of cellpose masks_to_flows_cpu: for each mask, run a 9-point diffusion
@@ -798,16 +916,25 @@ export class CellposeWebGPU {
       const niter = 2 * (ly + lx);
       const T = new Float64Array(ly * lx);
       const nxt = new Float64Array(n);
+      // Flat index per mask pixel, computed once instead of rebuilt from (Y,X) on every
+      // one of the ~2*(ly+lx) iterations. The nine taps then come off one base by
+      // addition rather than three multiplies plus two typed-array loads per pixel.
+      // The summation order is unchanged, so this is bit-identical — which matters,
+      // because the result feeds a threshold comparison that decides how many masks
+      // survive (173 of 190 on the reference image).
+      const idx = new Int32Array(n);
+      for (let k = 0; k < n; k++) idx[k] = Y[k] * lx + X[k];
+      const medIdx = ymed * lx + xmed;
       for (let t = 0; t < niter; t++) {
-        T[ymed * lx + xmed] += 1;
+        T[medIdx] += 1;
         for (let k = 0; k < n; k++) {
-          const yl = Y[k], xl = X[k];
-          nxt[k] = (T[yl * lx + xl] + T[(yl - 1) * lx + xl] + T[(yl + 1) * lx + xl] +
-                    T[yl * lx + xl - 1] + T[yl * lx + xl + 1] +
-                    T[(yl - 1) * lx + xl - 1] + T[(yl - 1) * lx + xl + 1] +
-                    T[(yl + 1) * lx + xl - 1] + T[(yl + 1) * lx + xl + 1]) / 9;
+          const c = idx[k], u = c - lx, v = c + lx;
+          nxt[k] = (T[c] + T[u] + T[v] +
+                    T[c - 1] + T[c + 1] +
+                    T[u - 1] + T[u + 1] +
+                    T[v - 1] + T[v + 1]) / 9;
         }
-        for (let k = 0; k < n; k++) T[Y[k] * lx + X[k]] = nxt[k];
+        for (let k = 0; k < n; k++) T[idx[k]] = nxt[k];
       }
       for (let k = 0; k < n; k++) {
         const yl = Y[k], xl = X[k];
@@ -835,21 +962,169 @@ export class CellposeWebGPU {
     return merr;
   }
 
+  /**
+   * GPU flow-consistency QC. Same contract as _maskFlowErrors: returns per-label mean
+   * squared error between the reconstructed and predicted flow.
+   *
+   * The diffusion runs on the GPU (see FLOWDIFF_WGSL for why the global formulation is
+   * equivalent to the per-mask one); the normalisation and the per-mask error stay on
+   * the CPU in f64, so the comparison against flow_threshold — which decides how many
+   * masks survive — is not made on f32 sums.
+   */
+  async _maskFlowErrorsGPU(labels, dy, dx, H, W, maxLabel, keep) {
+    const d = this.device, HW = H * W;
+    // Bounding boxes, centroids and the centre pixel, in three linear scans instead of
+    // one pass per mask. Local and global coordinates differ by a per-mask constant, so
+    // the centroid argmin is the same either way — and raster order matches the CPU's
+    // iteration order, which matters only for tie-breaking.
+    const minY = new Int32Array(maxLabel + 1).fill(H), maxY = new Int32Array(maxLabel + 1).fill(-1);
+    const minX = new Int32Array(maxLabel + 1).fill(W), maxX = new Int32Array(maxLabel + 1).fill(-1);
+    const ysum = new Float64Array(maxLabel + 1), xsum = new Float64Array(maxLabel + 1);
+    const cnt = new Int32Array(maxLabel + 1);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const l = labels[y * W + x];
+      if (l === 0) continue;
+      if (y < minY[l]) minY[l] = y; if (y > maxY[l]) maxY[l] = y;
+      if (x < minX[l]) minX[l] = x; if (x > maxX[l]) maxX[l] = x;
+      ysum[l] += y; xsum[l] += x; cnt[l]++;
+    }
+    const best = new Float64Array(maxLabel + 1).fill(Infinity);
+    const med = new Int32Array(maxLabel + 1).fill(-1);
+    const niter = new Int32Array(maxLabel + 1);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x, l = labels[i];
+      if (l === 0 || !keep[l] || cnt[l] === 0) continue;
+      const dd = (x - xsum[l] / cnt[l]) ** 2 + (y - ysum[l] / cnt[l]) ** 2;
+      if (dd < best[l]) { best[l] = dd; med[l] = i; }   // strict <: first in raster order wins
+    }
+    let maxNiter = 0;
+    for (let l = 1; l <= maxLabel; l++) {
+      if (!keep[l] || maxY[l] < 0) continue;
+      const ly = (maxY[l] - minY[l] + 1) + 2, lx = (maxX[l] - minX[l] + 1) + 2;
+      niter[l] = 2 * (ly + lx);
+      if (niter[l] > maxNiter) maxNiter = niter[l];
+    }
+    if (maxNiter === 0) return new Float64Array(maxLabel + 1);
+
+    const S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
+    const labBuf = d.createBuffer({ size: HW * 4, usage: S });
+    const nitBuf = d.createBuffer({ size: Math.max(256, (maxLabel + 1) * 4), usage: S });
+    const medBuf = d.createBuffer({ size: Math.max(256, (maxLabel + 1) * 4), usage: S });
+    const T0 = d.createBuffer({ size: HW * 4, usage: S });
+    const T1 = d.createBuffer({ size: HW * 4, usage: S });
+    const gradBuf = d.createBuffer({ size: 2 * HW * 4, usage: S });
+    d.queue.writeBuffer(labBuf, 0, labels instanceof Int32Array ? labels : new Int32Array(labels));
+    d.queue.writeBuffer(nitBuf, 0, niter);
+    d.queue.writeBuffer(medBuf, 0, med);
+    d.queue.writeBuffer(T0, 0, new Float32Array(HW));
+
+    // One uniform buffer holding every iteration's `t`, addressed by dynamic offset.
+    const align = d.limits.minUniformBufferOffsetAlignment || 256;
+    const uni = d.createBuffer({
+      size: align * maxNiter, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    const slot = new Uint32Array(align / 4);   // struct P { H:u32, W:u32, t:i32, _p:u32 }
+    for (let t = 0; t < maxNiter; t++) {
+      slot[0] = H; slot[1] = W; slot[2] = t; slot[3] = 0;
+      d.queue.writeBuffer(uni, t * align, slot);
+    }
+
+    const bg = (Tin, Tout) => d.createBindGroup({
+      layout: this._flowLayout, entries: [
+        { binding: 0, resource: { buffer: uni, size: 16 } },
+        { binding: 1, resource: { buffer: labBuf } },
+        { binding: 2, resource: { buffer: nitBuf } },
+        { binding: 3, resource: { buffer: medBuf } },
+        { binding: 4, resource: { buffer: Tin } },
+        { binding: 5, resource: { buffer: Tout } },
+      ],
+    });
+    const bgA = bg(T0, T1), bgB = bg(T1, T0);
+    const gx = Math.ceil(W / 16), gy = Math.ceil(H / 16);
+
+    const enc = this._mkEncoder("flowqc");
+    for (let t = 0; t < maxNiter; t++) {
+      const pass = enc.beginComputePass({ label: `flowdiff|${H}x${W}|t${t}` });
+      pass.setPipeline(this.pFlowDiff);
+      pass.setBindGroup(0, t % 2 === 0 ? bgA : bgB, [t * align]);
+      pass.dispatchWorkgroups(gx, gy); pass.end();
+    }
+    // Iteration t writes T1 for even t, T0 for odd — so the last write lands in T1 when
+    // maxNiter is odd and T0 when it is even.
+    const finalT = (maxNiter % 2 === 1) ? T1 : T0;
+    const gpass = enc.beginComputePass({ label: `flowgrad|${H}x${W}|n${maxNiter}` });
+    gpass.setPipeline(this.pFlowGrad);
+    gpass.setBindGroup(0, bg(finalT, gradBuf), [0]);
+    gpass.dispatchWorkgroups(gx, gy); gpass.end();
+
+    const rb = d.createBuffer({ size: 2 * HW * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    enc.copyBufferToBuffer(gradBuf, 0, rb, 0, 2 * HW * 4);
+    d.queue.submit([enc.finish()]);
+    await rb.mapAsync(GPUMapMode.READ);
+    const grad = new Float32Array(rb.getMappedRange().slice(0));
+    rb.unmap();
+    for (const b of [labBuf, nitBuf, medBuf, T0, T1, gradBuf, uni, rb]) b.destroy();
+
+    // Unit-normalise per pixel and accumulate the per-mask error, both in f64 to match
+    // the CPU path exactly at the point where the threshold is applied.
+    const errSum = new Float64Array(maxLabel + 1), errN = new Int32Array(maxLabel + 1);
+    for (let i = 0; i < HW; i++) {
+      const l = labels[i];
+      if (l === 0 || !keep[l]) continue;
+      const gdy = grad[i], gdx = grad[HW + i];
+      const mag = Math.sqrt(gdy * gdy + gdx * gdx) + 1e-60;
+      const ed = gdy / mag - dy[i], ex = gdx / mag - dx[i];
+      errSum[l] += ed * ed + ex * ex; errN[l]++;
+    }
+    const merr = new Float64Array(maxLabel + 1);
+    for (let l = 1; l <= maxLabel; l++) if (errN[l] > 0) merr[l] = errSum[l] / errN[l];
+    return merr;
+  }
+
   // Port of cellpose compute_masks post-processing order: remove oversized masks (>40%
   // of image area), then flow-consistency QC (remove_bad_flow_masks), then min-size —
   // matching get_masks_torch -> remove_bad_flow_masks -> fill_holes_and_remove_small_masks.
-  _filterMasks(labels, dy, dx, H, W, min_size, flow_threshold) {
+  // Everything before the flow-QC step, which is where the two paths diverge. Returns
+  // the state the QC needs, or null when there is nothing left to filter.
+  _filterPrepare(labels, H, W) {
     const maxLabel = labels.reduce((m, v) => v > m ? v : m, 0);
-    if (maxLabel === 0) return labels;
+    if (maxLabel === 0) return null;
     const counts = new Int32Array(maxLabel + 1);
     for (let i = 0; i < labels.length; i++) counts[labels[i]]++;
     const big = 0.4 * H * W;
     const keep = new Uint8Array(maxLabel + 1);
     for (let l = 1; l <= maxLabel; l++) keep[l] = (counts[l] > 0 && counts[l] <= big) ? 1 : 0;
     for (let i = 0; i < labels.length; i++) { const l = labels[i]; if (l && !keep[l]) labels[i] = 0; }
+    return { maxLabel, counts, keep };
+  }
 
+  // Synchronous filtering with the CPU flow reconstruction. Kept for computeMasks(),
+  // the non-GPU entry point, and as the reference the GPU path is checked against.
+  _filterMasks(labels, dy, dx, H, W, min_size, flow_threshold) {
+    const prep = this._filterPrepare(labels, H, W);
+    if (!prep) return labels;
+    const { maxLabel, keep } = prep;
+    const merr = (flow_threshold != null && flow_threshold > 0)
+      ? this._maskFlowErrors(labels, dy, dx, H, W, maxLabel, keep) : null;
+    return this._filterFinish(labels, prep, min_size, flow_threshold, merr);
+  }
+
+  // Same, with the diffusion on the GPU.
+  async _filterMasksGPU(labels, dy, dx, H, W, min_size, flow_threshold) {
+    const prep = this._filterPrepare(labels, H, W);
+    if (!prep) return labels;
+    const { maxLabel, keep } = prep;
+    let merr = null;
     if (flow_threshold != null && flow_threshold > 0) {
-      const merr = this._maskFlowErrors(labels, dy, dx, H, W, maxLabel, keep);
+      const mFlow = this._mark();
+      merr = await this._maskFlowErrorsGPU(labels, dy, dx, H, W, maxLabel, keep);
+      this._stage("gm_flowerr", mFlow);
+    }
+    return this._filterFinish(labels, prep, min_size, flow_threshold, merr);
+  }
+
+  _filterFinish(labels, { maxLabel, counts, keep }, min_size, flow_threshold, merr) {
+    if (merr) {
       for (let l = 1; l <= maxLabel; l++) if (keep[l] && merr[l] > flow_threshold) keep[l] = 0;
       for (let i = 0; i < labels.length; i++) { const l = labels[i]; if (l && !keep[l]) labels[i] = 0; }
     }
