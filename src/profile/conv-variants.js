@@ -394,27 +394,44 @@ export const VARIANTS = [
       [Math.ceil(W / TS), Math.ceil(H / TS), Math.ceil(Cout / BLK)],
   },
   {
-    id: "regblk_1x2",
-    what: "H2: + 1x2 register block (16 accumulators)",
-    wgsl: ({ K }) => V3(K, 1, 2),
-    dispatch: rbDispatch(1, 2),
-  },
-  {
-    id: "regblk_2x2",
-    what: "H2: + 2x2 register block (32 accumulators)",
-    wgsl: ({ K }) => V3(K, 2, 2),
-    dispatch: rbDispatch(2, 2),
-  },
-  {
-    id: "regblk_2x4",
-    what: "H2: + 2x4 register block (64 accumulators — expect occupancy loss)",
-    wgsl: ({ K }) => V3(K, 2, 4),
-    dispatch: rbDispatch(2, 4),
-  },
-  {
     id: "regblk_2x2_f16",
-    what: "H3: 2x2 block with f16 shared memory, f32 accumulation",
+    what: "f16 shared memory, f32 accumulation — rejected on numerics, see docs/PHASE1.md",
     wgsl: ({ K }) => V4(K, 2, 2),
     dispatch: rbDispatch(2, 2),
   },
+
+  // ---------------------------------------------------------------------------
+  // The (BLK, RBY, RBX) sweep.
+  //
+  // These three interact and cannot be tuned separately, which is why they are swept as
+  // a grid rather than one at a time:
+  //
+  //   BLK  output channels per workgroup. Divides how many times the activation tile is
+  //        re-read from global memory — the grid's z extent is ceil(Cout/BLK), and every
+  //        z-block walks all of Cin. Raising it is the direct fix for the amplification
+  //        the cost model reports (4-14x on the K=3 shapes).
+  //   RBY,RBX  output pixels per thread. Divides how many shared-memory weight reads it
+  //        takes to do a given number of FMAs.
+  //
+  // Both are bought with the same currency: BLK*RBY*RBX live accumulators per thread.
+  // The rows below hold that product at 16, 32 and 64 so the *split* is what varies,
+  // which is the question — 2x4 already showed that simply raising the product loses.
+  // ---------------------------------------------------------------------------
+  ...[
+    [8, 1, 2, 1], [16, 1, 1, 1], [4, 2, 2, 1],                          // 16 accumulators
+    [8, 2, 2, 1], [16, 2, 1, 1], [16, 1, 2, 1], [32, 1, 1, 1],          // 32
+    [16, 2, 2, 1], [32, 1, 2, 1], [32, 2, 1, 1], [64, 1, 1, 1], [8, 2, 4, 1], // 64
+    [32, 2, 2, 1], [64, 1, 2, 1],                                        // 128
+    // Input-channel staging on the best of the above. Trades shared memory for barrier
+    // count: CB=4 at 2x2 needs ~19 KB of the 32 KB threadgroup budget, which may cost
+    // more occupancy than the barriers were costing.
+    [8, 2, 2, 2], [8, 2, 2, 4], [16, 2, 2, 2], [16, 2, 2, 4], [16, 2, 2, 8],
+    [16, 1, 2, 2], [16, 1, 2, 4], [16, 1, 2, 8], [32, 1, 2, 2], [32, 1, 2, 4],
+    [8, 1, 2, 4], [8, 1, 2, 8], [32, 2, 2, 2], [8, 2, 2, 8],
+  ].map(([blk, rby, rbx, cb]) => ({
+    id: `blk${blk}_rb${rby}x${rbx}${cb > 1 ? `_cb${cb}` : ""}`,
+    what: `BLK=${blk}, ${rby}x${rbx} block, CB=${cb} — ${blk * rby * rbx} accumulators`,
+    wgsl: ({ K }) => convWGSL(K, rby, rbx, blk, cb),
+    dispatch: ({ H, W, Cout }) => convDispatch(H, W, Cout, rby, rbx, blk),
+  })),
 ];

@@ -161,27 +161,101 @@ which is where the remaining levers are.
 
 Correctness unchanged throughout: 190 / 183 / 173, all three demo pages, shims.
 
+## Phase 1c — tuning the conv's three budgets jointly
+
+With the flow QC fixed, `conv` was back to 95.7% of GPU time on `cellpose_020` and the
+per-shape diagnostics said something specific: the K=3 shapes (86% of conv time) were
+`kernel-throughput` at 29–48% with requested bandwidth only 34–66% of roof — so *not*
+traffic-bound even counting re-reads. The `traffic-amplification` flag the previous
+section pointed at turned out to come almost entirely from the K=1 shapes, which are ~5%
+of conv time. Chasing it would have been chasing the wrong thing.
+
+What did matter was that attainment fell as channels grew — 46.7% at 32ch, 29.4% at 256ch
+— and that the 256ch shape is the single largest line item. Three parameters control that,
+and they cannot be tuned separately because they trade against two shared budgets:
+
+| | divides | costs |
+|---|---|---|
+| `BLK` output channels per workgroup | activation re-reads from global memory | registers |
+| `RBY`×`RBX` output pixels per thread | shared-memory weight reads per FMA | registers |
+| `CB` input channels staged per barrier | barriers (512 per workgroup at Cin=256) | threadgroup memory |
+
+Swept as a grid, holding the register product fixed so the *split* is what varies:
+
+| config | GFLOP/s | attainment | vs shipping |
+|---|---|---|---|
+| BLK=8, 2×2, CB=1 (previous) | 1028 | 33.5% | 1.00× |
+| BLK=16, 2×2, CB=1 | 1153 | 37.6% | 1.12× |
+| BLK=16, 2×2, CB=2 | 1189 | 38.7% | 1.16× |
+| **BLK=16, 2×2, CB=4** | **1227** | **40.0%** | **1.19×** |
+| BLK=32, 1×2, CB=2 | 1190 | 38.8% | 1.16× |
+| BLK=32, 2×2, CB=2 | 503 | 16.4% | 0.49× |
+| BLK=64, 1×1, CB=1 | 644 | 20.8% | 0.63× |
+
+Both budgets bite hard and in opposite directions, which is why the optimum is interior on
+every axis: past 64 accumulators the register file gives out (BLK=32 at 2×2 loses *half*
+its throughput), and past CB=4 the threadgroup allocation exceeds even the raised limit.
+
+Two supporting changes:
+
+- **`maxComputeWorkgroupStorageSize` is now requested at the adapter's maximum.** The
+  WebGPU default is 16 KB; this adapter offers 32 KB. CB=4 at 2×2 needs ~21 KB, so the
+  default was silently capping the sweep. It is a ceiling, not an allocation, and a kernel
+  that exceeds it fails pipeline creation loudly rather than degrading — nothing to lose.
+- The benchmark now reports unbuildable variants instead of crashing on them. Pipeline
+  limits fail through *asynchronous* validation, so `createComputePipeline` returns an
+  invalid pipeline rather than throwing and the first symptom was an unrelated
+  `getBindGroupLayout` error. It is caught with an error scope now.
+
+**This step is not bit-exact**, and that is a deliberate break from the rest of Phase 1.
+Staging CB input channels reorders the accumulation over `ci`, so results differ by
+~5e-7 relative — f32 summation-order noise, given f32 epsilon is 1.2e-7 and the reduction
+runs over 256 channels. For scale, that is ~500× smaller than the f16 error rejected
+above, and unlike f16 it is not a loss of precision but a different, equally valid order.
+Verified end-to-end rather than on the tolerance alone: 190 / 183 / 173 unchanged, demo
+pages unchanged (179 / 278 / 240 masks).
+
+Per-shape config selection was measured and rejected: BLK=16/2×2/CB=4 wins on 5 of 7
+shapes, and picking the best per shape would add only ~1.7% for the complexity of
+compiling and dispatching several pipelines per kernel size.
+
+End to end this is 1.06×, much less than the kernel's 1.19× — because conv is no longer
+99.8% of wall clock. That gap *is* the result: the conv is into diminishing returns, and
+the next real lever on it is `subgroup-matrix`, not more tuning.
+
+| workload | original | before 1c | after 1c | total |
+|---|---|---|---|---|
+| single_tile | 346 ms | 48 ms | 44 ms | **7.92×** |
+| composite | 3069 ms | 366 ms | 354 ms | **8.66×** |
+| cellpose_020 | 9806 ms | 1048 ms | 982 ms | **9.98×** |
+| cellpose_020 d15 | 7955 ms | 850 ms | 798 ms | **9.97×** |
+| **total** | **21177 ms** | 2312 ms | **2178 ms** | **9.72×** |
+
+Attainment is now 38–55% depending on workload.
+
 ## Next, in order
 
-1. **StarDist and InstanSeg still carry the old kernel** and the old 4.6% attainment. The
-   Phase 1 findings transfer directly — same 16×16 / BLK=8 shape, same dynamically-indexed
+1. **StarDist and InstanSeg still carry the old kernel** and the old 4.5% attainment. The
+   Phase 1 findings transfer directly — same 16×16 shape, same dynamically-indexed
    accumulator — so this is mechanical work with a known ~10× waiting at the end of it.
-   Cheapest remaining win by a wide margin.
-2. **Traffic amplification in the conv.** 12–22% of below-roof time and rising as the
-   kernel improves. The fix is standard: block over input channels so the activation tile
-   is loaded once per output-channel group rather than once per group per channel.
+   Cheapest remaining win by a wide margin, and deferred only because the current focus is
+   Cellpose.
+2. **`subgroup-matrix`** — Metal simdgroup matmul, available on this adapter and still
+   unused. Now the only substantial lever left on the conv: parameter tuning is exhausted
+   (Phase 1c found an interior optimum on all three axes), and 40% of roof means ~2.5×
+   still on the table. It is a real rewrite — implicit GEMM with im2col in shared memory —
+   so it deserves its own phase.
 3. **The flow-QC kernel dispatches over the whole image** regardless of how much of it is
    masked, which is why the nuclear channel only gained 1.5× against the cyto channel's
    8.2×. Bounding the dispatch to the union of mask bounding boxes, or compacting mask
    pixels into a dense list, would recover that.
-4. **`subgroup-matrix`** — Metal simdgroup matmul, available on this adapter and still
-   unused. This is the lever that would take the conv from 37% toward the roof, and it is
-   a real rewrite (implicit GEMM with im2col in shared memory), so it deserves its own
-   phase rather than being squeezed in here.
-5. **Re-test f16** properly, against reference agreement rather than a tolerance.
+4. **Re-test f16** properly, against reference agreement rather than a tolerance.
+5. **`getmasks` is back to 26% of wall clock on `composite`** now that everything around it
+   shrank again. The remainder after the flow QC is the seed-growth and label-assignment
+   work, which is a different (and smaller) problem than the one Phase 1b solved.
 
-Architectural work (H1/H2/H3 in the report) remains gated behind Gate B and is now fifth
-in line behind four cheaper, better-evidenced targets.
+Architectural work (H1/H2/H3 in the report) remains gated behind Gate B — still failing at
+4–12% against a 40% threshold — and sits behind all five of these.
 
 ## Caveats
 

@@ -36,6 +36,12 @@ export function sharedDevice() {
           maxBufferSize: lim.maxBufferSize,
           maxStorageBufferBindingSize: lim.maxStorageBufferBindingSize,
           maxComputeInvocationsPerWorkgroup: lim.maxComputeInvocationsPerWorkgroup,
+          // The default is 16 KB, which is below what this adapter offers and below what
+          // the conv kernel wants once it stages several input channels per barrier
+          // round. Asking for the adapter's maximum costs nothing — it is a ceiling, not
+          // an allocation — and a kernel that exceeds it fails pipeline creation rather
+          // than degrading, so there is no silent-fallback risk in raising it.
+          maxComputeWorkgroupStorageSize: lim.maxComputeWorkgroupStorageSize,
         }
       });
       device.__adapterInfo = adapter.info ?? null;   // surfaced through ptero.env

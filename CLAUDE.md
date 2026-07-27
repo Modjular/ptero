@@ -71,9 +71,11 @@ labels each op passes to `beginComputePass` are the contract between the engines
 `parseLabel()`; change them together. Nothing here is imported unless a profiling run asks
 for it.
 
-**The conv kernel is generated** (`src/conv-kernel.js`), one pipeline per K, with a 2×2
-spatial register block. All three numbers in it are measured optima, not taste — a 2×4
-block is *slower*. Re-run `tools/convbench.mjs` before changing any of them. The kernel it
+**The conv kernel is generated** (`src/conv-kernel.js`), one pipeline per K. Its four
+constants — BLK, TS, RBY/RBX, CB — are a *joint* measured optimum, interior on every axis,
+because they trade against two shared budgets: registers (BLK·RBY·RBX accumulators) and
+threadgroup memory (CB tiles). Raising any one of them loses, sometimes by half. Re-run
+`tools/convbench.mjs` before changing any of them; don't reason about one in isolation. The kernel it
 replaced is frozen in `src/profile/baseline-conv.js` as the benchmark's zero point; don't
 "clean it up" into an import of the current kernel or the waterfall loses its reference
 and the equivalence check compares the new kernel against itself.
@@ -82,8 +84,8 @@ and the equivalence check compares the new kernel against itself.
 Read it before changing architecture. `docs/PHASE0.md` is the throughput accounting and
 its gate decision — read it before optimising anything, because it says which 0.2% of the
 dispatches are not worth your time. `docs/PHASE1.md` is what came of it — 11× on the
-conv, then 10× on the flow-consistency QC once that became the bottleneck, for **9.16×
-end-to-end** with the label maps unchanged. Read it before optimising: it records which
+conv, then 10× on the flow-consistency QC once that became the bottleneck, then a joint
+retune of the conv's three budgets, for **9.72× end-to-end** with the label maps unchanged. Read it before optimising: it records which
 levers are already pulled and which four are next.
 
 **Both rebuilt hot paths are exactness-verified, and that is the bar.** The conv is

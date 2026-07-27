@@ -168,13 +168,26 @@ export async function benchVariants(device, variants, {
   // picks at dispatch time. Pipelines are cached by generated source so a variant that
   // specialises on K builds two pipelines, not sixteen.
   const pipelines = new Map();
-  const pipelineFor = (v, shape) => {
+  const unavailable = new Map();   // variant id -> why it could not be built
+  const pipelineFor = async (v, shape) => {
     const code = typeof v.wgsl === "function" ? v.wgsl(shape) : v.wgsl;
     if (!pipelines.has(code)) {
-      pipelines.set(code, device.createComputePipeline({
+      // A variant can be legitimately unbuildable — the obvious one is exceeding
+      // maxComputeWorkgroupStorageSize, which is 16 KB by default and is exactly what a
+      // large input-channel staging factor spends. That is a result, not a crash.
+      //
+      // It has to be caught with an error scope, not try/catch: pipeline validation is
+      // asynchronous, so createComputePipeline returns an *invalid* pipeline rather than
+      // throwing, and the first synchronous symptom is getBindGroupLayout() failing
+      // somewhere unrelated.
+      device.pushErrorScope("validation");
+      const pipe = device.createComputePipeline({
         layout: "auto",
         compute: { module: device.createShaderModule({ code, label: v.id }), entryPoint: "main" },
-      }));
+      });
+      const err = await device.popErrorScope();
+      pipelines.set(code, err ? null : pipe);
+      if (err) unavailable.set(v.id, String(err.message).split("\n")[0].slice(0, 160));
     }
     return pipelines.get(code);
   };
@@ -186,7 +199,8 @@ export async function benchVariants(device, variants, {
     let ref = null;
     for (const v of variants) {
       if (v.applicable && !v.applicable(shape)) continue;
-      const pipe = pipelineFor(v, shape);
+      const pipe = await pipelineFor(v, shape);
+      if (!pipe) continue;
       const bg = bindGroupFor(device, pipe, r);
       const wg = v.dispatch(shape);
 
@@ -224,6 +238,13 @@ export async function benchVariants(device, variants, {
 
   const summary = variants.map((v) => {
     const mine = rows.filter((r) => r.variant === v.id);
+    if (!mine.length) {
+      return {
+        variant: v.id, what: v.what, unavailable: unavailable.get(v.id) || "no applicable shapes",
+        covers: 0, allOk: false, failures: [],
+        weightedGflops: null, weightedAttainment: null, projectedSpeedup: null,
+      };
+    }
     // Weights renormalise over the shapes this variant actually handles, and `covers`
     // reports how much of real conv time that is — a kernel that only does K=3 is not
     // comparable to one that does everything until you know it covers 95%.

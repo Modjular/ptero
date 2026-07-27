@@ -97,6 +97,12 @@ console.log(`\nroof ${out.roofGflops.toFixed(0)} GFLOP/s (measured this session)
 console.log("variant".padEnd(18) + "ok".padEnd(6) + "GFLOP/s".padStart(9)
   + "attain".padStart(9) + "proj speedup".padStart(14) + "  what");
 for (const s of out.summary) {
+  if (s.unavailable) {
+    console.log(s.variant.padEnd(18) + "n/a".padEnd(6) + "—".padStart(9) + "—".padStart(9)
+      + "—".padStart(14) + "  " + s.what);
+    console.log("".padEnd(18) + "   " + s.unavailable);
+    continue;
+  }
   console.log(
     s.variant.padEnd(18)
     + (s.allOk ? "ok" : "FAIL").padEnd(6)

@@ -26,14 +26,20 @@
 // Cout is a multiple of BLK for every layer but the 3-channel output head, so writes stay
 // guarded rather than assuming it.
 
-export const BLK = 8;    // output channels per workgroup
+// All four are measured optima from a joint sweep, not independent choices — they trade
+// against each other through two shared budgets, registers (BLK*RBY*RBX accumulators) and
+// threadgroup memory (CB tiles). Raising any one past these values *loses*: BLK=32 at
+// 2x2 collapses to 16% of roof on register pressure, and CB=8 exceeds even the 32 KB
+// budget. Re-run `node tools/convbench.mjs` before touching them.
+export const BLK = 16;   // output channels per workgroup — divides activation re-reads
 export const TS = 16;    // workgroup side, in threads
-export const RBY = 2;    // output pixels per thread, vertical    } measured optimum —
-export const RBX = 2;    // output pixels per thread, horizontal  } see convbench
+export const RBY = 2;    // output pixels per thread, vertical   } divides shared-memory
+export const RBX = 2;    // output pixels per thread, horizontal } weight reads per FMA
+export const CB = 4;     // input channels staged per barrier round — divides barriers
 
-/** Workgroup grid for one conv dispatch. */
-export const convDispatch = (H, W, Cout) =>
-  [Math.ceil(W / (TS * RBX)), Math.ceil(H / (TS * RBY)), Math.ceil(Cout / BLK)];
+/** Workgroup grid for one conv dispatch. Must match the shader's geometry. */
+export const convDispatch = (H, W, Cout, rby = RBY, rbx = RBX, blk = BLK) =>
+  [Math.ceil(W / (TS * rbx)), Math.ceil(H / (TS * rby)), Math.ceil(Cout / blk)];
 
 /**
  * Generate the conv shader for a given kernel size.
@@ -42,26 +48,36 @@ export const convDispatch = (H, W, Cout) =>
  * summed into the output) stay uniform-driven rather than specialised: they do not affect
  * the inner loop, and specialising them would quadruple the pipeline count for nothing.
  */
-export function convWGSL(K, rby = RBY, rbx = RBX) {
+export function convWGSL(K, rby = RBY, rbx = RBX, blk = BLK, cb = CB) {
   const KK = K * K, PAD = (K / 2) | 0;
   const OUTX = TS * rbx, OUTY = TS * rby;
   const TWx = OUTX + (K - 1), TWy = OUTY + (K - 1);
+  const TWxy = TWx * TWy;
   const P = rby * rbx;
   const acc = (c, p) => `a${c}_${p}`;
-  const chans = Array.from({ length: BLK }, (_, c) => c);
+  const chans = Array.from({ length: blk }, (_, c) => c);
   const pixels = Array.from({ length: P }, (_, p) => p);
 
-  // Read each activation once per tap, then reuse it across all BLK output channels.
-  const taps = [];
-  for (let py = 0; py < rby; py++) {
-    for (let px = 0; px < rbx; px++) {
-      taps.push(`        let v${py * rbx + px} = tile[(ly + ${py}u + ky) * TWx + lx + ${px}u + kx];`);
+  // The tap/FMA body, emitted once per staged input channel. Reading each activation
+  // once and reusing it across all BLK output channels is the register-blocking win;
+  // unrolling over the staged channels on top of that gives the scheduler `cb`
+  // independent FMA chains to interleave while a shared-memory read is in flight.
+  const inner = (s) => {
+    const tOff = s === 0 ? "" : ` + ${s * TWxy}u`;
+    const wOff = s === 0 ? "" : ` + ${s * blk * KK}u`;
+    const taps = [];
+    for (let py = 0; py < rby; py++) {
+      for (let px = 0; px < rbx; px++) {
+        taps.push(`        let v${s}_${py * rbx + px} = tile[(ly + ${py}u + ky) * TWx + lx + ${px}u + kx${tOff}];`);
+      }
     }
-  }
-  const fmas = chans.flatMap((c) => [
-    `        let wv${c} = ws[${c}u * KK + k];`,
-    ...pixels.map((p) => `        ${acc(c, p)} = ${acc(c, p)} + v${p} * wv${c};`),
-  ]);
+    const fmas = chans.flatMap((c) => [
+      `        let w${s}_${c} = ws[${c}u * KK + k${wOff}];`,
+      ...pixels.map((p) => `        ${acc(c, p)} = ${acc(c, p)} + v${s}_${p} * w${s}_${c};`),
+    ]);
+    return [...taps, ...fmas].join("\n");
+  };
+  const stages = Array.from({ length: cb }, (_, s) => s);
 
   const stores = [];
   for (let py = 0; py < rby; py++) {
@@ -91,14 +107,14 @@ struct P { H:u32, W:u32, Cin:u32, Cout:u32, K:u32, pad:u32, useRelu:u32, useAdd:
 @group(0) @binding(8) var<storage,read>       resid: array<f32>;
 @group(0) @binding(7) var<storage,read_write> outp:  array<f32>;
 const TS  = ${TS}u;
-const BLK = ${BLK}u;
+const BLK = ${blk}u;
 const K   = ${K}u;
 const KK  = ${KK}u;
 const PAD = ${PAD};
 const TWx = ${TWx}u;
 const TWy = ${TWy}u;
-var<workgroup> tile: array<f32, ${TWx * TWy}u>;
-var<workgroup> ws:   array<f32, ${BLK * KK}u>;
+var<workgroup> tile: array<f32, ${cb * TWxy}u>;
+var<workgroup> ws:   array<f32, ${cb * blk * KK}u>;
 
 @compute @workgroup_size(${TS},${TS},1)
 fn main(@builtin(workgroup_id) wg: vec3<u32>,
@@ -117,41 +133,47 @@ ${chans.map((c) => `  let bc${c} = b[coBase + ${c}u];`).join("\n")}
 ${chans.flatMap((c) => pixels.map((p) => `  var ${acc(c, p)} = bc${c};`)).join("\n")}
 
   let stride = p.Cin * KK;
-  for (var ci = 0u; ci < p.Cin; ci = ci + 1u) {
-    let base = ci * HW;
-    let sc = scale[ci]; let sh = shift[ci];
-    // Cooperative load of this channel's activation tile, applying the optional skip add,
+  // Input channels are staged CB at a time per barrier round. The barrier count is the
+  // reason: at Cin=256 with CB=1 a workgroup pays 512 of them, and each is a pipeline
+  // drain that the ~3 resident waves cannot hide.
+  for (var ci = 0u; ci < p.Cin; ci = ci + ${cb}u) {
+    // Cooperative load of the staged activation tiles, applying the optional skip add,
     // the BN scale/shift and the optional relu on the way in — the fusion that makes the
     // elementwise operators free here (Phase 0 measured all non-conv work at 0.19%).
-    for (var i = lt; i < TWx * TWy; i = i + TS * TS) {
-      let ty = i / TWx; let tx = i % TWx;
+    for (var i = lt; i < ${cb * TWxy}u; i = i + TS * TS) {
+      let s = i / ${TWxy}u;
+      let j = i % ${TWxy}u;
+      let ty = j / TWx; let tx = j % TWx;
       let gy = oy + i32(ty); let gx = ox + i32(tx);
       var v = 0.0;
-      if (gy >= 0 && gy < i32(p.H) && gx >= 0 && gx < i32(p.W)) {
-        let idx = base + u32(gy) * p.W + u32(gx);
+      // Cin is not always a multiple of cb (the stem has Cin=2), so a staged channel
+      // past the end contributes a zero activation rather than being special-cased.
+      if (ci + s < p.Cin && gy >= 0 && gy < i32(p.H) && gx >= 0 && gx < i32(p.W)) {
+        let idx = (ci + s) * HW + u32(gy) * p.W + u32(gx);
         v = inp[idx];
         if (p.useAdd == 1u) { v = v + addv[idx]; }
-        v = v * sc + sh;
+        v = v * scale[ci + s] + shift[ci + s];
         if (p.useRelu == 1u) { v = max(v, 0.0); }
       }
       tile[i] = v;
     }
-    for (var i = lt; i < BLK * KK; i = i + TS * TS) {
-      let j = i / KK; let kk = i % KK;
-      ws[i] = w[(coBase + j) * stride + wbaseOf(ci) + kk];
+    for (var i = lt; i < ${cb * blk * KK}u; i = i + TS * TS) {
+      let s = i / ${blk * KK}u;
+      let j = (i % ${blk * KK}u) / KK;
+      let kk = i % KK;
+      var wv = 0.0;
+      if (ci + s < p.Cin) { wv = w[(coBase + j) * stride + (ci + s) * KK + kk]; }
+      ws[i] = wv;
     }
     workgroupBarrier();
     for (var ky = 0u; ky < K; ky = ky + 1u) {
       for (var kx = 0u; kx < K; kx = kx + 1u) {
         let k = ky * K + kx;
-${taps.join("\n")}
-${fmas.join("\n")}
+${stages.map(inner).join("\n")}
       }
     }
     workgroupBarrier();
   }
 ${stores.join("\n")}
-}
-
-fn wbaseOf(ci: u32) -> u32 { return ci * KK; }`;
+}`;
 }
