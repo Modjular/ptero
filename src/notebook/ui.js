@@ -6,10 +6,11 @@ const $ = (id) => document.getElementById(id);
 
 // ---- seed script --------------------------------------------------------------------
 // The original nuclear/cytoplasm ratio script, split at its own comment boundaries —
-// they were already natural cell breaks. `AWAIT` is substituted at seed time: the GPU
-// boundary is async, and whether that is visible to Python depends on whether the
-// browser gives us JSPI (see shims/_ptero_bridge.py).
-const SEED = (AWAIT) => [
+// they were already natural cell breaks. Written exactly as upstream cellpose/stardist
+// docs would have it — no `await` — regardless of whether the browser has JS Promise
+// Integration; the kernel's auto-await rewrite (see shims/_ptero_autoawait.py) makes
+// that invisible.
+const SEED = [
 `import numpy as np
 import pandas as pd
 from skimage import io, measure
@@ -27,8 +28,8 @@ img.shape`,
 #     from stardist.models import StarDist2D
 #     nuc_masks, _ = StarDist2D.from_pretrained('2D_versatile_fluo').predict_instances(nuc_channel)
 model = models.CellposeModel(gpu=True, model_type='cyto3')
-cell_masks, _, _ = ${AWAIT}model.eval(cyto_channel, diameter=100, channels=[0, 0])
-nuc_masks,  _, _ = ${AWAIT}model.eval(nuc_channel,  diameter=50,  channels=[0, 0])
+cell_masks, _, _ = model.eval(cyto_channel, diameter=100, channels=[0, 0])
+nuc_masks,  _, _ = model.eval(nuc_channel,  diameter=50,  channels=[0, 0])
 f"{cell_masks.max()} cells, {nuc_masks.max()} nuclei"`,
 
 `# --- filter cells without nuclei ---
@@ -164,10 +165,6 @@ async function chooseWorkspace() {
 // ---- status ------------------------------------------------------------------------------
 function setStatus(msg) { $("stat").textContent = msg; }
 
-// Whether the shims are callable synchronously (JSPI) or need `await`. Resolved at
-// boot; the seed script is written to match.
-export let syncCalls = true;
-
 // ---- boot ---------------------------------------------------------------------------------
 export async function start() {
   cells.mount($("cells"), { dark: isDark });
@@ -189,7 +186,7 @@ export async function start() {
   });
   $("resetcells").addEventListener("click", () => {
     if (!confirm("Replace all cells with the example pipeline? This discards your edits.")) return;
-    cells.resetCells(SEED(syncCalls ? "" : "await "));
+    cells.resetCells(SEED);
   });
   applyTheme(isDark);
 
@@ -208,32 +205,17 @@ export async function start() {
     document.body.prepend(banner(`Couldn't start the Python kernel: ${e.message}`));
     throw e;
   }
-  // Must be probed on a runPythonAsync stack: can_run_sync() reports whether the
-  // *current* stack can block on a promise, and a plain runPython stack always says
-  // no, even in a browser with full JSPI support. Cells run through runPythonAsync,
-  // so this is the answer that matches how the seed script will actually be executed.
-  syncCalls = await kernel.raw().runPythonAsync(
-    "from pyodide.ffi import can_run_sync\ncan_run_sync()");
-
   // Restore the previous session's cells, or seed the example pipeline.
   const saved = cells.loadSavedCells();
   if (saved) {
     for (const { source, author } of saved) cells.appendCell(source, author);
   } else {
-    for (const src of SEED(syncCalls ? "" : "await ")) cells.appendCell(src);
+    for (const src of SEED) cells.appendCell(src);
   }
 
-  if (!syncCalls) {
-    document.body.prepend(banner(
-      "This browser doesn't support JS Promise Integration, so GPU calls can't be made " +
-      "to look synchronous — segmentation calls need `await` here (the example cells " +
-      "already have it). Chrome 137+ removes the need.", "warn"));
-  }
-  // The chat pane mounts last: it needs to know the calling convention so the agent's
-  // system prompt tells it whether to write `await`. Loaded dynamically so a session
-  // that never opens the assistant doesn't pay for it.
+  // Loaded dynamically so a session that never opens the assistant doesn't pay for it.
   const { mountChat } = await import("../agent/chat.js");
-  mountChat({ syncCalls });
+  mountChat();
 
   setStatus("ready");
   await refreshWorkspace();

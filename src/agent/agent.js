@@ -26,9 +26,6 @@ export class Agent {
     this.controller = null;
   }
 
-  get syncCalls() { return this._syncCalls ?? true; }
-  set syncCalls(v) { this._syncCalls = v; }
-
   stop() { this.controller?.abort(); }
 
   /** Handle one user turn, running tools until the model has nothing left to do. */
@@ -47,7 +44,7 @@ export class Agent {
         let reply;
         try {
           reply = await send({
-            system: systemPrompt({ syncCalls: this.syncCalls }),
+            system: systemPrompt(),
             messages: this.messages,
             tools: SCHEMAS,
             onText: (t) => stream.push(t),
@@ -105,7 +102,7 @@ export class Agent {
           const stream = this.ui.stream();
           try {
             const final = await send({
-              system: systemPrompt({ syncCalls: this.syncCalls }),
+              system: systemPrompt(),
               messages: this.messages,
               tools: [],                    // no tools: it cannot keep grinding
               onText: (t) => stream.push(t),
