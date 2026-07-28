@@ -3,8 +3,8 @@
 // are spent.
 //
 //   python3 -m http.server 8765 &
-//   node tools/test_agent.mjs                # both providers
-//   node tools/test_agent.mjs --only gemini  # one of: anthropic, gemini
+//   node tools/test_agent.mjs                # all providers
+//   node tools/test_agent.mjs --only gemini  # one of: anthropic, gemini, openai
 //
 // What it pins down, none of which is observable from unit tests:
 //   * the SSE parsers reassemble text and tool-call JSON split across chunk boundaries
@@ -12,7 +12,8 @@
 //   * push_to_ui lands a cell marked author=agent
 //   * CONTEXT PROTECTION — no traceback text ever reaches the chat transcript
 //   * RECURSION CAP — 3 failed scratch tests, then a re-prompt with tools stripped
-//   * the Anthropic->Gemini translation (schemas, tool-result naming, roles)
+//   * the Anthropic->Gemini and Anthropic->OpenAI translations (schemas, tool-result
+//     naming/roles, argument stringification)
 import puppeteer from "puppeteer-core";
 
 const args = process.argv.slice(2);
@@ -58,6 +59,36 @@ const geminiSSE = (blocks, finish = "STOP") =>
     }],
   })}\n\n`).join("");
 
+// OpenAI-compatible (DeepInfra): chunks stream `delta.content` fragments and, separately,
+// `delta.tool_calls` fragments keyed by index — id/name arrive once, on a call's first
+// chunk, and `function.arguments` accumulates as a JSON string across the rest.
+const openaiSSE = (blocks, finish = "tool_calls") => {
+  const out = [];
+  let idx = 0;
+  for (const b of blocks) {
+    if (b.text !== undefined) {
+      for (const c of b.text.match(/.{1,7}/gs) || [])
+        out.push(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: c }, finish_reason: null }] })}`, "");
+    } else {
+      const i = idx++;
+      out.push(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [
+        { index: i, id: b.id, type: "function", function: { name: b.name, arguments: "" } },
+      ] }, finish_reason: null }] })}`, "");
+      for (const c of JSON.stringify(b.input).match(/.{1,11}/gs) || [])
+        out.push(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [
+          { index: i, function: { arguments: c } },
+        ] }, finish_reason: null }] })}`, "");
+    }
+  }
+  out.push(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: finish }] })}`, "");
+  out.push("data: [DONE]", "");
+  return out.join("\n");
+};
+
+// The one place the three encodings need a shared "the turn is over, no more tool calls"
+// finish value, since it differs by provider and none of the three treat the others' spelling as valid.
+const finishFor = (enc) => enc === anthropicSSE ? "end_turn" : enc === geminiSSE ? "STOP" : "stop";
+
 // The same conversation, expressed once, rendered per provider.
 const WORKING = (enc) => [
   enc([{ text: "Let me see what's loaded." }, { id: "t1", name: "inspect_user_kernel", input: {} }]),
@@ -73,7 +104,7 @@ const WORKING = (enc) => [
     "f'{len(df)} objects'",
   ].join("\n"), vars: [{ name: "img", shape: [256, 256] }] } }]),
   enc([{ id: "t5", name: "push_to_ui", input: { code: "# count nuclei\nlabels.max()" } }]),
-  enc([{ text: "Added a cell that counts nuclei. Press ▶ to run it." }], enc === anthropicSSE ? "end_turn" : "STOP"),
+  enc([{ text: "Added a cell that counts nuclei. Press ▶ to run it." }], finishFor(enc)),
 ];
 
 const CAP = (enc) => [
@@ -81,7 +112,7 @@ const CAP = (enc) => [
   enc([{ id: "f2", name: "test_in_scratch", input: { code: "1/0" } }]),
   enc([{ id: "f3", name: "test_in_scratch", input: { code: "1/0" } }]),
   enc([{ text: "I can't get this working — something keeps coming out as zero. What should it be?" }],
-      enc === anthropicSSE ? "end_turn" : "STOP"),
+      finishFor(enc)),
 ];
 
 const CORS = {
@@ -101,6 +132,12 @@ const PROVIDERS = {
     enc: geminiSSE,
     storage: { "ptero-provider": "gemini", "ptero-key-gemini": "AIza-test",
                "ptero-model-gemini": "gemini-2.5-flash" },
+  },
+  openai: {
+    host: "api.deepinfra.com",
+    enc: openaiSSE,
+    storage: { "ptero-provider": "openai", "ptero-key-openai": "di-test",
+               "ptero-model-openai": "deepseek-ai/DeepSeek-V3" },
   },
 };
 
@@ -178,7 +215,7 @@ async function run(browser, name) {
   if (name === "anthropic") {
     check("system prompt carries the model routing table", /stardist-fluo/.test(first.system));
     check("tools sent in Anthropic schema form", !!first.tools?.[0]?.input_schema);
-  } else {
+  } else if (name === "gemini") {
     const decls = first.tools[0].functionDeclarations;
     check("system prompt carries the model routing table",
           /stardist-fluo/.test(first.systemInstruction.parts[0].text));
@@ -194,6 +231,20 @@ async function run(browser, name) {
     check("roles alternate user/model (Gemini rejects consecutive same-role turns)",
           last.contents.every((c, i) => c.role === (i % 2 === 0 ? "user" : "model")),
           last.contents.map(c => c.role).join(","));
+  } else {
+    check("system prompt carries the model routing table",
+          first.messages[0].role === "system" && /stardist-fluo/.test(first.messages[0].content));
+    check("tools sent in OpenAI function-call schema form",
+          first.tools[0].type === "function" && !!first.tools[0].function.parameters);
+    check("nested schemas survive translation",
+          !!first.tools.find(t => t.function.name === "test_in_scratch")
+            .function.parameters.properties.vars.items.properties.shape);
+    const toolMsgs = last.messages.filter(m => m.role === "tool");
+    check("tool results become role:\"tool\" messages keyed by tool_call_id",
+          toolMsgs.length > 0 && toolMsgs.every(m => !!m.tool_call_id));
+    const withCalls = sent.flatMap(r => r.messages).find(m => m.role === "assistant" && m.tool_calls);
+    check("assistant tool_use blocks become tool_calls with stringified arguments",
+          !!withCalls && typeof withCalls.tool_calls[0].function.arguments === "string");
   }
 
   await page.close();

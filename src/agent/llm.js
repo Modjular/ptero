@@ -1,18 +1,19 @@
 // Model providers, called directly from the page.
 //
-// Two are supported: Anthropic and Google Gemini. Both allow browser-origin calls
-// with a user-supplied key — Anthropic needs an explicit opt-in header, Gemini serves
-// CORS by default. That keeps the "serve a folder and open a page" story intact, at
-// the cost of the key being readable by anything on this origin. Two consequences are
-// handled rather than merely noted:
+// Three are supported: Anthropic, Google Gemini, and an OpenAI-compatible adapter
+// pointed at DeepInfra. All three allow browser-origin calls with a user-supplied key —
+// Anthropic needs an explicit opt-in header, Gemini and DeepInfra serve CORS by default.
+// That keeps the "serve a folder and open a page" story intact, at the cost of the key
+// being readable by anything on this origin. Two consequences are handled rather than
+// merely noted:
 //   * keys are read from localStorage at call time and never parked on `window`;
 //   * pandas HTML output is sanitised before it reaches the DOM (notebook/cells.js),
 //     because a DataFrame built from an untrusted file is otherwise a path to them.
 //
 // The conversation format used everywhere above this module is Anthropic's — content
-// blocks, `tool_use`, `tool_result`. It is the more expressive of the two, so Gemini
-// translates on the way out and normalises its responses back into the same shape.
-// agent.js never learns which provider is in use.
+// blocks, `tool_use`, `tool_result`. It is the most expressive of the three, so Gemini
+// and OpenAI/DeepInfra each translate on the way out and normalise their responses back
+// into the same shape. agent.js never learns which provider is in use.
 
 export class LLMError extends Error {}
 
@@ -345,7 +346,138 @@ const gemini = {
   },
 };
 
-export const PROVIDERS = { anthropic, gemini };
+// ---- OpenAI-compatible (DeepInfra) -----------------------------------------------------
+// DeepInfra hosts open-weight models behind an OpenAI-compatible Chat Completions API
+// (docs.deepinfra.com), so this adapter speaks the OpenAI wire format rather than a
+// bespoke one. Swapping OPENAI_BASE would point it at any other OpenAI-compatible host.
+const OPENAI_BASE = "https://api.deepinfra.com/v1/openai";
+
+function openaiTools(tools) {
+  if (!tools?.length) return undefined;
+  return tools.map(t => ({
+    type: "function",
+    function: { name: t.name, description: t.description, parameters: t.input_schema },
+  }));
+}
+
+// Anthropic-shaped history -> OpenAI `messages`. Tool results become their own `role:
+// "tool"` messages keyed by `tool_call_id` rather than staying attached to the turn that
+// produced them, so one Anthropic `user` message holding several tool_result blocks
+// expands into several OpenAI messages here.
+function openaiMessages(system, messages) {
+  const out = [];
+  if (system) out.push({ role: "system", content: system });
+  for (const msg of messages) {
+    if (typeof msg.content === "string") {
+      out.push({ role: msg.role, content: msg.content });
+      continue;
+    }
+    if (msg.role === "user") {
+      // Our history never mixes tool_result blocks with plain text in one user turn
+      // (agent.js pushes them as separate messages), so this array is tool results only.
+      for (const block of msg.content) {
+        out.push({
+          role: "tool",
+          tool_call_id: block.tool_use_id,
+          content: block.is_error ? `Error: ${block.content}` : String(block.content),
+        });
+      }
+      continue;
+    }
+    let content = null;
+    const tool_calls = [];
+    for (const block of msg.content) {
+      if (block.type === "text") content = (content ?? "") + block.text;
+      else if (block.type === "tool_use") {
+        tool_calls.push({
+          id: block.id,
+          type: "function",
+          function: { name: block.name, arguments: JSON.stringify(block.input ?? {}) },
+        });
+      }
+    }
+    const m = { role: "assistant", content };
+    if (tool_calls.length) m.tool_calls = tool_calls;
+    out.push(m);
+  }
+  return out;
+}
+
+const openai = {
+  id: "openai",
+  label: "OpenAI-compatible (DeepInfra)",
+  defaultModel: "deepseek-ai/DeepSeek-V3",
+  keyPlaceholder: "di-…",
+  keyUrl: "https://deepinfra.com/dash/api_keys",
+  host: "api.deepinfra.com",
+
+  headers() {
+    return { "content-type": "application/json", "authorization": `Bearer ${requireKey()}` };
+  },
+
+  async listModels() {
+    const res = await fetch(`${OPENAI_BASE}/models`, { headers: this.headers() });
+    await checkResponse(res, "DeepInfra");
+    const { data } = await res.json();
+    return data.map(m => ({ id: m.id, label: m.id }));
+  },
+
+  async send({ system, messages, tools, onText, signal, maxTokens }) {
+    let res;
+    try {
+      res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({
+          model: getModel(),
+          messages: openaiMessages(system, messages),
+          tools: openaiTools(tools),
+          max_tokens: maxTokens,
+          stream: true,
+        }),
+        signal,
+      });
+    } catch (e) {
+      if (e.name === "AbortError") throw e;
+      throw new LLMError(`Couldn't reach DeepInfra: ${e.message}`);
+    }
+    await checkResponse(res, "DeepInfra");
+
+    // Chunks stream `delta.content` fragments and, separately, `delta.tool_calls`
+    // fragments keyed by index — id/name arrive once, on a call's first chunk, and
+    // `function.arguments` accumulates as a JSON string across the rest.
+    let text = "";
+    const calls = new Map();
+    let stopReason = null;
+    await readSSE(res, (ev) => {
+      if (ev.error) throw new LLMError(ev.error.message || "stream error");
+      const choice = ev.choices?.[0];
+      if (!choice) return;
+      stopReason = choice.finish_reason ?? stopReason;
+      const delta = choice.delta ?? {};
+      if (delta.content) { text += delta.content; onText?.(delta.content); }
+      for (const tc of delta.tool_calls ?? []) {
+        let call = calls.get(tc.index);
+        if (!call) calls.set(tc.index, call = { id: tc.id, name: tc.function?.name, args: "" });
+        if (tc.function?.arguments) call.args += tc.function.arguments;
+      }
+    });
+    const content = [];
+    if (text) content.push({ type: "text", text });
+    for (const call of calls.values()) {
+      // A truncated arguments string is recoverable the same way Anthropic's malformed
+      // tool_use blocks are: report it back as a tool error and let the model retry.
+      let input = {}, malformed = false;
+      try { input = call.args ? JSON.parse(call.args) : {}; } catch { malformed = true; }
+      const block = { type: "tool_use", id: call.id, name: call.name, input };
+      if (malformed) block._malformed = true;
+      content.push(block);
+    }
+    return { content, stopReason };
+  },
+};
+
+export const PROVIDERS = { anthropic, gemini, openai };
 
 // ---- dispatch ---------------------------------------------------------------------------
 export async function send({ system, messages, tools, onText, signal, maxTokens = 4096 }) {

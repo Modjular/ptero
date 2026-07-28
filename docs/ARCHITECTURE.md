@@ -131,17 +131,18 @@ output.** Those object counts are fiction.
 
 ### Providers and the API key
 
-Two providers are supported: Anthropic and Google Gemini, chosen in ⚙. Both allow
+Three providers are supported: Anthropic, Google Gemini, and an OpenAI-compatible
+adapter pointed at DeepInfra (`docs.deepinfra.com`), chosen in ⚙. All three allow
 browser-origin calls with a user-supplied key — Anthropic needs the explicit
-`anthropic-dangerous-direct-browser-access` header, Gemini serves CORS by default
-(verified against the live endpoint, which answers a browser `fetch` with a normal JSON
-error rather than blocking it). No proxy either way.
+`anthropic-dangerous-direct-browser-access` header, Gemini and DeepInfra serve CORS by
+default (verified against the live endpoints, which answer a browser `fetch`/preflight
+with a normal response rather than blocking it). No proxy either way.
 
 The conversation format used above `llm.js` is Anthropic's — content blocks,
-`tool_use`, `tool_result`. It is the more expressive of the two, so the Gemini adapter
-translates on the way out and normalises responses back into the same shape;
-`agent.js` never learns which provider is in use. Three translation details are
-load-bearing:
+`tool_use`, `tool_result`. It is the most expressive of the three, so the Gemini and
+OpenAI/DeepInfra adapters translate on the way out and normalise responses back into the
+same shape; `agent.js` never learns which provider is in use. Load-bearing translation
+details:
 
 - Gemini rejects JSON Schema vocabulary it doesn't know, so tool schemas are stripped
   of `additionalProperties`/`$schema` recursively rather than maintained twice.
@@ -150,6 +151,13 @@ load-bearing:
 - Gemini keys tool results by function **name**, not by call id, so the id→name map is
   rebuilt while walking the conversation. Gemini also has no call ids of its own, so
   synthetic ones are minted for our own history to point at.
+- OpenAI's wire format has no `tool_result` content block — each one becomes its own
+  `role: "tool"` message keyed by `tool_call_id`, so a single Anthropic `user` message
+  holding several tool results expands into several OpenAI messages.
+- OpenAI streams tool-call arguments as fragments of a JSON *string*, indexed by
+  position in the model's `tool_calls` array rather than by id (the id/name only arrive
+  once, on that call's first chunk) — accumulated the same way Anthropic's
+  `input_json_delta` fragments are.
 
 Model lists are fetched from the provider with the user's key rather than hardcoded, so
 they don't go stale. Keys and model choices are stored per provider, so switching back
