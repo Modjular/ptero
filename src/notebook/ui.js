@@ -96,8 +96,11 @@ function applyTheme(dark) {
 const PRODUCED = /\.(csv|tif|tiff|png|json|txt|xlsx)$/i;
 let knownFiles = new Set();
 
-async function refreshWorkspace() {
-  const names = await kernel.syncWorkspace();
+// `rescan` forces a remount so files dropped into the folder from outside the tab are
+// picked up (see kernel.rescanWorkspace) — worth the extra cost on an explicit ↻ click,
+// not on the cheap after-every-cell-run refresh where it'd buy nothing.
+async function refreshWorkspace(rescan = false) {
+  const names = await (rescan ? kernel.rescanWorkspace() : kernel.syncWorkspace());
   const info = $("workspace-info");
   if (kernel.hasWorkspace()) {
     info.textContent = names.length
@@ -175,7 +178,7 @@ export async function start() {
 
   $("themetoggle").addEventListener("click", () => applyTheme(!isDark));
   $("choosews").addEventListener("click", chooseWorkspace);
-  $("refreshws").addEventListener("click", refreshWorkspace);
+  $("refreshws").addEventListener("click", () => refreshWorkspace(true));
   $("addcell").addEventListener("click", () => {
     const c = cells.appendCell("");
     c.view.focus();

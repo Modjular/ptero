@@ -179,7 +179,13 @@ const anthropic = {
         throw new LLMError(ev.error?.message || "stream error");
       }
     });
-    return { content: blocks.filter(Boolean), stopReason };
+    // A text block can open (content_block_start) and never receive a delta — some
+    // models emit an empty text block ahead of a tool-only turn. That's fine as a
+    // response, but agent.js pushes reply.content straight into history, and Anthropic
+    // rejects an empty text block on the *next* request with "text content blocks must
+    // be non-empty". Drop them here so they never reach history.
+    const content = blocks.filter(b => b && !(b.type === "text" && b.text === ""));
+    return { content, stopReason };
   },
 };
 

@@ -271,22 +271,37 @@ _ptero_describe()
 
 // ---- workspace --------------------------------------------------------------------
 let nativefs = null;
+let workspaceHandle = null;
 
-export async function mountWorkspace(handle) {
-  if (!pyodide) throw new Error("kernel not booted");
+// Pyodide's NativeFS mount only reconciles files it already has FS nodes for —
+// syncfs() never discovers something dropped into the folder from outside the tab
+// (Finder, another process, a second window). The only way to see those is to remount
+// the same handle, which forces a fresh directory read. That's what re-choosing the
+// folder does by accident; this does it deliberately, without re-prompting for
+// permission.
+async function remount() {
   if (nativefs) {
     await nativefs.syncfs();
     pyodide.FS.unmount("/workspace");
   } else {
     try { pyodide.FS.mkdir("/workspace"); } catch { /* exists */ }
   }
-  nativefs = await pyodide.mountNativeFS("/workspace", handle);
+  nativefs = await pyodide.mountNativeFS("/workspace", workspaceHandle);
   pyodide.runPython("import os; os.chdir('/workspace')");
+}
+
+export async function mountWorkspace(handle) {
+  if (!pyodide) throw new Error("kernel not booted");
+  workspaceHandle = handle;
+  await remount();
 }
 
 export function hasWorkspace() { return nativefs !== null; }
 
-/** Flush pending writes to disk and list what's there now. */
+/** Flush pending writes to disk and list what's there now. Cheap, but — see remount()
+ * above — blind to files added from outside the tab since the last mount. Called
+ * after every cell run, where that blind spot doesn't matter: cell-written files are
+ * already tracked pyodide FS nodes. */
 export async function syncWorkspace() {
   if (!pyodide) return [];
   if (nativefs) await nativefs.syncfs();
@@ -296,6 +311,15 @@ export async function syncWorkspace() {
   } catch {
     return [];
   }
+}
+
+/** Like syncWorkspace(), but remounts first so externally-added files actually show
+ * up. Costs a full directory re-read — reserve it for an explicit user refresh, not
+ * the after-every-cell sync. */
+export async function rescanWorkspace() {
+  if (!pyodide) return [];
+  if (nativefs) await remount();
+  return syncWorkspace();
 }
 
 /** Read a file out of the Pyodide FS as bytes, for download links. */
