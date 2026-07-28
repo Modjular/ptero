@@ -15,6 +15,7 @@ const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`
 // anything until a cell actually imports one.
 export const SHIM_FILES = [
   "_ptero_bridge.py",
+  "_ptero_autoawait.py",
   "ptero.py",
   "cellpose/__init__.py",
   "cellpose/models.py",
@@ -145,6 +146,11 @@ export async function boot({ stdout } = {}) {
     stderr: (m) => onStdout(m),
   });
   await installShims(py);
+  // Unconditional, unlike the segmentation shims (which load lazily on first import):
+  // every cell needs the auto-await rewrite applied, including the very first one, which
+  // may not import a ptero shim at all. `_ptero_auto_await` also has to land in the same
+  // global namespace cells execute in, since the rewritten source calls it unqualified.
+  py.runPython("from _ptero_autoawait import _ptero_auto_await_source, _ptero_auto_await");
   pyodide = py;
   globalThis.pyodide = py;   // for headless drivers / DevTools poking
   return py;
@@ -190,6 +196,24 @@ async function ensureMatplotlib() {
 }
 
 // ---- running ----------------------------------------------------------------------
+// A call site the auto-await rewrite wraps adds one extra frame to any traceback raised
+// from inside it — cell output shows the full, untruncated traceback (see cells.js), so
+// that implementation detail would otherwise leak straight to the user. Strip it here,
+// line-based rather than one big regex, since a traceback's "File ..." line and its
+// source line are two separate lines, not a fixed-width block.
+function stripAutoAwaitFrames(msg) {
+  const lines = msg.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*File ".*", line \d+, in _ptero_auto_await\s*$/.test(lines[i])) {
+      i++;   // also drop the source line pyodide prints under the frame, if present
+      continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n");
+}
+
 /**
  * Run a chunk of Python and return a display bundle.
  *
@@ -208,7 +232,20 @@ export async function run(src, { onOutput } = {}) {
     await ensurePackages(src);
     await ensureMatplotlib();
 
-    const result = await pyodide.runPythonAsync(src);
+    // Invisible sync/await: rewrites `src` so every call is awaited-if-needed, so
+    // unmodified upstream-style code (no `await`) works whether or not the browser has
+    // JS Promise Integration. See shims/_ptero_autoawait.py.
+    const transform = pyodide.globals.get("_ptero_auto_await_source");
+    const transformed = transform(src);
+    transform.destroy?.();
+
+    let result;
+    try {
+      result = await pyodide.runPythonAsync(transformed);
+    } catch (e) {
+      e.message = stripAutoAwaitFrames(e.message ?? String(e));
+      throw e;
+    }
 
     let html = null, resultText = null;
     if (result !== undefined && result !== null) {

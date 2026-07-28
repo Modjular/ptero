@@ -74,7 +74,7 @@ module's docstring and repeated in the agent's system prompt. The important ones
 `ptero.py` is the discovery surface the imitations can't provide: `ptero.models.list()`
 answers "what is installed here, and which should I use?" at runtime.
 
-### Sync vs `await` — measured, not assumed
+### Sync vs `await` — measured, not assumed, and now invisible
 
 The GPU boundary is async, so shim methods are written `async def`. Pyodide's `run_sync`
 (JS Promise Integration) makes them callable synchronously, which is what upstream
@@ -84,8 +84,21 @@ fidelity requires.
 True on a stack entered through `runPythonAsync` and False on a plain `runPython` stack
 in the very same page — verified in Chrome, not inferred. So the check happens per call
 inside `maybe_sync`, never cached at import time, and falls back to returning the
-coroutine (caller must `await`) where JSPI is unavailable. `ptero.env.sync_calls`
-reports the live answer; the seed script and system prompt are generated to match.
+coroutine (caller must `await`) where JSPI is unavailable.
+
+That used to leak into cell/agent code: whether generated code wrote `await model.eval(...)`
+or plain `model.eval(...)` depended on which browser it was running in, and code copied
+straight from the real upstream docs (never `await`, since the real APIs are synchronous)
+would silently receive an unawaited coroutine instead of a label array on a browser
+without JSPI. `src/shims/_ptero_autoawait.py` removes that: before a cell runs,
+`_ptero_auto_await_source()` rewrites its source via an AST transform, wrapping every
+call in `await _ptero_auto_await(...)` — a no-op pass-through for an ordinary value,
+and a transparent resolve for a coroutine. `can_run_sync()` stays exactly as described
+above, but it is now purely an implementation detail of `maybe_sync`; nothing above it
+needs to know the answer or write `await`. The one deliberate scope limit: a
+user-defined *synchronous* helper that consumes a shim result inline can't be reached
+(`await` is illegal inside a plain `def`/`lambda`/`class` body), so those still need
+`await` written by hand if the browser lacks JSPI — see the module's docstring.
 
 ### The agent
 

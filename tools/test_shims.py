@@ -25,7 +25,26 @@ SYNC = "--sync" in sys.argv
 pyodide = types.ModuleType("pyodide")
 ffi = types.ModuleType("pyodide.ffi")
 ffi.can_run_sync = lambda: SYNC
-ffi.run_sync = lambda aw: asyncio.get_event_loop().run_until_complete(aw)
+
+
+def _fake_run_sync(aw):
+    """Fake JSPI's run_sync by manually stepping the coroutine, rather than
+    asyncio.run_until_complete: none of the coroutines this file drives (the fake
+    pteroSegment below never really awaits a pending Future) actually suspend, and
+    unlike run_until_complete, manual stepping works even when called from *inside*
+    an already-running event loop. That reentrant case is exactly what the auto-await
+    rewrite's own top-level-await coroutine now produces for every cell, regardless of
+    SYNC — and real JSPI's stack-switching is built precisely for nested suspension
+    like this (Pyodide's own top-level-await isn't even asyncio-driven), so this fake
+    needs to tolerate it too, not reject it as asyncio's single flat loop does."""
+    try:
+        aw.send(None)
+    except StopIteration as e:
+        return e.value
+    raise RuntimeError("fake run_sync: coroutine actually suspended, can't fake it")
+
+
+ffi.run_sync = _fake_run_sync
 pyodide.ffi = ffi
 sys.modules["pyodide"] = pyodide
 sys.modules["pyodide.ffi"] = ffi
@@ -197,6 +216,83 @@ check("suggest brightfield -> instanseg",
       ptero.models.suggest(modality="brightfield") == "instanseg-brightfield")
 check("suggest cells -> cyto3", ptero.models.suggest(target="cells") == "cellpose-cyto3")
 check("suggest unknown -> cyto3 fallback", ptero.models.suggest() == "cellpose-cyto3")
+
+# --- _ptero_autoawait (invisible sync/await) -----------------------------------
+# Runs the *real* maybe_sync-wrapped cellpose shim through the rewrite, in whichever
+# mode this process is running under (SYNC or not) — the whole point of the rewrite is
+# that the same unmodified, no-await source produces correct results either way.
+print("\n_ptero_autoawait (invisible sync/await):")
+import ast as _ast  # noqa: E402
+
+import _ptero_autoawait as aa  # noqa: E402
+
+
+def run_transformed(src, ns):
+    """Execute src after the auto-await rewrite, resolving a top-level coroutine if one
+    comes back — mirrors what pyodide.runPythonAsync does for a real cell."""
+    ns.setdefault("_ptero_auto_await", aa._ptero_auto_await)
+    out = aa._ptero_auto_await_source(src)
+    code = compile(out, "<autoawait-test>", "exec", flags=_ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    coro = eval(code, ns)
+    if coro is not None:
+        asyncio.get_event_loop().run_until_complete(coro)
+    return ns
+
+
+CALLS.clear()
+ns = {"model": models.CellposeModel(model_type="cyto3"), "np": np}
+run_transformed(
+    "masks, flows, styles = model.eval(np.zeros((16, 16)), diameter=100, channels=[0, 0])",
+    ns,
+)
+check("bare call (no await written) resolves correctly", ns["masks"].max() == 2)
+
+ns = {"model": models.CellposeModel(model_type="cyto3"), "np": np}
+run_transformed(
+    "masks, flows, styles = await model.eval(np.zeros((16, 16)), diameter=100, channels=[0, 0])",
+    ns,
+)
+check("explicit `await` still resolves correctly (no double-await TypeError)",
+      ns["masks"].max() == 2)
+
+ns = {"model": models.CellposeModel(model_type="cyto3"), "np": np}
+run_transformed(
+    "coro = model.eval(np.zeros((16, 16)), diameter=100, channels=[0, 0])\n"
+    "masks, flows, styles = await coro",
+    ns,
+)
+check("coroutine stashed then awaited later resolves correctly", ns["masks"].max() == 2)
+
+ns = {"model": models.CellposeModel(model_type="cyto3"), "np": np}
+run_transformed(
+    "results = [model.eval(np.zeros((16, 16)), diameter=100, channels=[0, 0])[0] "
+    "for _ in range(2)]",
+    ns,
+)
+check("call inside a comprehension resolves correctly",
+      len(ns["results"]) == 2 and all(r.max() == 2 for r in ns["results"]))
+
+src = ("def helper(img):\n"
+       "    masks, _, _ = model.eval(img, diameter=100, channels=[0, 0])\n"
+       "    return masks")
+out = aa._ptero_auto_await_source(src)
+try:
+    compile(out, "<t>", "exec", flags=_ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    compiled = True
+except SyntaxError:
+    compiled = False
+check("nested def body left untouched (documented scope limit) and still compiles",
+      "await" not in out and compiled, out)
+
+src = "handler = lambda img: model.eval(img, diameter=100, channels=[0, 0])"
+out = aa._ptero_auto_await_source(src)
+try:
+    compile(out, "<t>", "exec", flags=_ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    compiled = True
+except SyntaxError:
+    compiled = False
+check("lambda body left untouched (await is illegal there) and still compiles",
+      "await" not in out and compiled, out)
 
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

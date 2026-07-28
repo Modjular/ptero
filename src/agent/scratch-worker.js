@@ -11,7 +11,7 @@
 importScripts("https://cdn.jsdelivr.net/pyodide/v0.28.0/full/pyodide.js");
 
 const SHIM_FILES = [
-  "_ptero_bridge.py", "_ptero_mock.py", "ptero.py",
+  "_ptero_bridge.py", "_ptero_autoawait.py", "_ptero_mock.py", "ptero.py",
   "cellpose/__init__.py", "cellpose/models.py",
   "stardist/__init__.py", "stardist/models.py",
   "csbdeep/__init__.py", "csbdeep/utils.py",
@@ -26,6 +26,23 @@ let mockInstalled = false;
 let tifffileReady = false;
 
 const imports = (src, name) => new RegExp(`\\b(?:import|from)\\s+${name}\\b`).test(src);
+
+// A call site the auto-await rewrite wraps adds one extra frame to any traceback raised
+// from inside it. `error` below is already truncated to the last 6 lines for the agent's
+// context budget, so this has to run *before* that slice, or the extra frame could push
+// a genuinely useful line out of the window.
+function stripAutoAwaitFrames(msg) {
+  const lines = msg.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*File ".*", line \d+, in _ptero_auto_await\s*$/.test(lines[i])) {
+      i++;   // also drop the source line pyodide prints under the frame, if present
+      continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join("\n");
+}
 
 async function boot(shimBase, catalogueJson) {
   py = await loadPyodide({
@@ -44,6 +61,11 @@ async function boot(shimBase, catalogueJson) {
     py.FS.writeFile(`${SHIM_DIR}/${f}`, sources[i]);
   });
   py.runPython(`import sys; sys.path.insert(0, ${JSON.stringify(SHIM_DIR)})`);
+  // Unconditional, same reasoning as kernel.js: draft code never writes `await` under
+  // the new design, and this Worker runs in the same browser as the main kernel, so it
+  // needs the same invisible auto-await rewrite to actually validate GPU-shaped code on
+  // a browser without JS Promise Integration.
+  py.runPython("from _ptero_autoawait import _ptero_auto_await_source, _ptero_auto_await");
 
   // ptero.models.list() must answer here too — the agent asks the scratch kernel what
   // models exist. There is no registry in this Worker, so serve the parent's snapshot.
@@ -92,7 +114,12 @@ async function test({ code, vars = [] }) {
 
   try {
     await ensureDeps(code);
-    const result = await py.runPythonAsync(code);
+    // Invisible sync/await: same rewrite as the main kernel (see kernel.js and
+    // shims/_ptero_autoawait.py) — draft code never writes `await`, so this Worker,
+    // which runs in the same browser, needs the same transform to actually exercise
+    // GPU-shaped code correctly on a browser without JS Promise Integration.
+    const transformed = py.globals.get("_ptero_auto_await_source")(code);
+    const result = await py.runPythonAsync(transformed);
     let repr = null;
     if (result !== undefined && result !== null) {
       repr = String(result?.toString ? result.toString() : result).slice(0, 2000);
@@ -104,8 +131,10 @@ async function test({ code, vars = [] }) {
       ok: false,
       stdout: out.join("\n").slice(0, 2000),
       // Only the last few traceback lines: the Pyodide frames in between are noise
-      // that would eat the agent's context without telling it anything.
-      error: String(e.message || e).trim().split("\n").slice(-6).join("\n"),
+      // that would eat the agent's context without telling it anything. Strip the
+      // auto-await wrapper frame first, or it could push a useful line out of the
+      // window.
+      error: stripAutoAwaitFrames(String(e.message || e).trim()).split("\n").slice(-6).join("\n"),
       vars: describe(),
     };
   }

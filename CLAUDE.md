@@ -84,7 +84,10 @@ anything performance-related, in that repo rather than this one.
 **`can_run_sync()` describes the current Python stack, not the browser.** It returns
 `true` from `runPythonAsync` and `false` from `runPython` in the same page. Never cache
 it — `maybe_sync` checks per call. A boot-time probe on a `runPython` stack will tell
-you JSPI is unavailable on a browser that has it.
+you JSPI is unavailable on a browser that has it. This matters only if you're touching
+`_ptero_bridge.py`/`_ptero_autoawait.py` themselves — cell and agent code never needs to
+know the answer or write `await`; `src/shims/_ptero_autoawait.py` rewrites every cell so
+that's invisible (see `docs/ARCHITECTURE.md`'s "Sync vs `await`" section).
 
 **Never dunder-name a JS global called from a Python class method.** `js.__foo` inside a
 method gets mangled to `js._ClassName__foo` and fails. The bridge globals are

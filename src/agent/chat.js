@@ -255,14 +255,13 @@ function updateGate() {
 }
 
 // ---- mount ---------------------------------------------------------------------------
-export function mountChat({ syncCalls = true } = {}) {
+export function mountChat() {
   paneEl = $("chat");
   logEl = $("chatlog");
   inputEl = $("chatinput");
   sendBtn = $("chatsend");
 
   agent = new Agent(makeUI());
-  agent.syncCalls = syncCalls;
 
   sendBtn.addEventListener("click", submit);
   inputEl.addEventListener("input", autosize);

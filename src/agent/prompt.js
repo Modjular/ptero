@@ -7,7 +7,7 @@
 // written out by hand, so adding a model to registry.js teaches the agent about it.
 import { catalogue } from "../registry.js";
 
-export function systemPrompt({ syncCalls = true } = {}) {
+export function systemPrompt() {
   const models = catalogue().map(m =>
     `- **${m.id}** (${m.download_mb} MB${m.resident ? ", already loaded" : ""})\n` +
     `  Good for: ${m.good_for}\n` +
@@ -15,13 +15,6 @@ export function systemPrompt({ syncCalls = true } = {}) {
     `  Key parameter: ${m.key_param}\n` +
     `  Defaults: ${JSON.stringify(m.defaults)}`
   ).join("\n");
-
-  const call = syncCalls ? "" : "await ";
-  const asyncNote = syncCalls
-    ? "Segmentation calls are synchronous — write them exactly as you would on a desktop."
-    : "This browser lacks JS Promise Integration, so segmentation calls are coroutines: " +
-      "they MUST be written `await model.eval(...)`. This is the one deviation from " +
-      "upstream syntax; everything else is identical.";
 
   return `You are a co-scientist embedded in a bio-image analysis notebook. The person
 you are helping is a working scientist who knows their biology well and their Python
@@ -58,16 +51,14 @@ looks exactly like a right one.
 
 \`\`\`python
 from cellpose import models
-masks, flows, styles = ${call}models.CellposeModel(model_type='cyto3').eval(img, diameter=100, channels=[0,0])
+masks, flows, styles = models.CellposeModel(model_type='cyto3').eval(img, diameter=100, channels=[0,0])
 
 from stardist.models import StarDist2D
-labels, details = ${call}StarDist2D.from_pretrained('2D_versatile_fluo').predict_instances(img)
+labels, details = StarDist2D.from_pretrained('2D_versatile_fluo').predict_instances(img)
 
 from instanseg import InstanSeg
-labels, _ = ${call}InstanSeg('brightfield_nuclei').eval_small_image(rgb)
+labels, _ = InstanSeg('brightfield_nuclei').eval_small_image(rgb)
 \`\`\`
-
-${asyncNote}
 
 Deviations from upstream you must respect:
 - \`models.Cellpose.eval\` returns 4 values; \`models.CellposeModel.eval\` returns 3.
