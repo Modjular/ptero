@@ -308,55 +308,63 @@ _ptero_describe()
 
 // ---- workspace --------------------------------------------------------------------
 let nativefs = null;
-let workspaceHandle = null;
 
-// Pyodide's NativeFS mount only reconciles files it already has FS nodes for —
-// syncfs() never discovers something dropped into the folder from outside the tab
-// (Finder, another process, a second window). The only way to see those is to remount
-// the same handle, which forces a fresh directory read. That's what re-choosing the
-// folder does by accident; this does it deliberately, without re-prompting for
-// permission.
-async function remount() {
-  if (nativefs) {
-    await nativefs.syncfs();
-    pyodide.FS.unmount("/workspace");
-  } else {
-    try { pyodide.FS.mkdir("/workspace"); } catch { /* exists */ }
-  }
-  nativefs = await pyodide.mountNativeFS("/workspace", workspaceHandle);
-  pyodide.runPython("import os; os.chdir('/workspace')");
+// Emscripten's syncfs is bidirectional and treats "local doesn't know about this
+// entry" as "delete it" on whichever side is the destination. `nativefs.syncfs()`
+// (what mountNativeFS() hands back) only ever runs it as a *push* — pyodide's mem FS
+// as source of truth, the real folder as destination — so a file dropped into the
+// folder from outside the tab (Finder, another process, a second window), which
+// pyodide's mem FS has no node for, reads as "shouldn't exist" and gets deleted from
+// the real folder. Confirmed by direct repro, not just inferred from the source.
+//
+// A *pull* first — populate=true, real folder as source — closes that gap: it can
+// only ever add or remove nodes in pyodide's own mem FS mirror, never touch the real
+// folder, so it's safe to run unconditionally. Once local knows about every file the
+// pull found, a push after it can no longer mistake any of them for garbage. Both
+// directions go through the raw global `pyodide.FS.syncfs`, not the `nativefs`
+// object's own one-directional method, because that's the only way to request a pull
+// at all — and it also means picking up externally-added files no longer needs the
+// unmount+remount dance a previous fix here relied on (mountNativeFS's own populate
+// pull was never the part that was missing; a *safe* push was).
+function fsSyncfs(populate) {
+  return new Promise((resolve, reject) => {
+    pyodide.FS.syncfs(populate, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+async function syncBothWays() {
+  await fsSyncfs(true);
+  await fsSyncfs(false);
 }
 
 export async function mountWorkspace(handle) {
   if (!pyodide) throw new Error("kernel not booted");
-  workspaceHandle = handle;
-  await remount();
+  if (nativefs) {
+    await syncBothWays();
+    pyodide.FS.unmount("/workspace");
+  } else {
+    try { pyodide.FS.mkdir("/workspace"); } catch { /* exists */ }
+  }
+  nativefs = await pyodide.mountNativeFS("/workspace", handle);
+  pyodide.runPython("import os; os.chdir('/workspace')");
 }
 
 export function hasWorkspace() { return nativefs !== null; }
 
-/** Flush pending writes to disk and list what's there now. Cheap, but — see remount()
- * above — blind to files added from outside the tab since the last mount. Called
- * after every cell run, where that blind spot doesn't matter: cell-written files are
- * already tracked pyodide FS nodes. */
+/** Flush pending writes to disk and list what's there now — pulling first (see
+ * syncBothWays above) so files added from outside the tab both show up *and*, more
+ * importantly, are never mistaken for something to delete. Called after every cell
+ * run as well as on an explicit refresh; there's no cheaper partial sync that's still
+ * safe, since any push needs the preceding pull to know what not to delete. */
 export async function syncWorkspace() {
   if (!pyodide) return [];
-  if (nativefs) await nativefs.syncfs();
+  if (nativefs) await syncBothWays();
   const dir = nativefs ? "/workspace" : pyodide.runPython("__import__('os').getcwd()");
   try {
     return pyodide.FS.readdir(dir).filter(n => n !== "." && n !== "..").sort();
   } catch {
     return [];
   }
-}
-
-/** Like syncWorkspace(), but remounts first so externally-added files actually show
- * up. Costs a full directory re-read — reserve it for an explicit user refresh, not
- * the after-every-cell sync. */
-export async function rescanWorkspace() {
-  if (!pyodide) return [];
-  if (nativefs) await remount();
-  return syncWorkspace();
 }
 
 /** Read a file out of the Pyodide FS as bytes, for download links. */
