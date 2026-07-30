@@ -132,11 +132,16 @@ output.** Those object counts are fiction.
 ### Providers and the API key
 
 Three providers are supported: Anthropic, Google Gemini, and an OpenAI-compatible
-adapter pointed at DeepInfra (`docs.deepinfra.com`), chosen in ⚙. All three allow
-browser-origin calls with a user-supplied key — Anthropic needs the explicit
-`anthropic-dangerous-direct-browser-access` header, Gemini and DeepInfra serve CORS by
-default (verified against the live endpoints, which answer a browser `fetch`/preflight
-with a normal response rather than blocking it). No proxy either way.
+adapter, chosen in ⚙. The OpenAI-compatible adapter defaults to DeepInfra
+(`docs.deepinfra.com`) but its Base URL field can point at any host speaking the OpenAI
+Chat Completions wire format, including a local server — its API key is optional there,
+since self-hosted servers typically don't check auth, unlike the other two providers.
+All three allow browser-origin calls with a user-supplied key — Anthropic needs the
+explicit `anthropic-dangerous-direct-browser-access` header, Gemini and DeepInfra serve
+CORS by default (verified against the live endpoints, which answer a browser
+`fetch`/preflight with a normal response rather than blocking it). No proxy either way,
+which means a custom OpenAI-compatible host must serve CORS itself or the browser will
+block the request.
 
 The conversation format used above `llm.js` is Anthropic's — content blocks,
 `tool_use`, `tool_result`. It is the most expressive of the three, so the Gemini and

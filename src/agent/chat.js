@@ -24,14 +24,20 @@ function add(cls, text) {
 
 // Minimal markdown: fenced code and inline `code` are the only things the agent
 // reliably emits that plain text would mangle. Everything is inserted as text nodes.
+//
+// `.msg` renders with `white-space: pre-wrap`, so a leading/trailing blank line in the
+// model's raw text — a completely ordinary way for it to format a reply — shows up as
+// real vertical space in the bubble, not CSS padding. Blank-line runs are trimmed at
+// the outer edges (never internally, which would eat intentional paragraph breaks).
 function renderProse(el, raw) {
   el.replaceChildren();
-  for (const [i, part] of raw.split(/```(?:\w+\n|\n)?/).entries()) {
+  const trimmed = raw.replace(/^\n+/, "").replace(/\n+$/, "");
+  for (const [i, part] of trimmed.split(/```(?:\w+\n|\n)?/).entries()) {
     if (!part) continue;
     if (i % 2) {
       const pre = document.createElement("pre");
       pre.className = "msg-code";
-      pre.textContent = part.replace(/\n$/, "");
+      pre.textContent = part.replace(/^\n+/, "").replace(/\n+$/, "");
       el.appendChild(pre);
     } else {
       for (const [j, chunk] of part.split("`").entries()) {
@@ -94,17 +100,27 @@ function makeUI() {
       inputEl.focus();
     },
 
-    // Streaming prose: one bubble that grows as tokens arrive.
+    // Streaming prose: one bubble that grows as tokens arrive. A fast local model can
+    // emit far more SSE chunks per second than the eye can register, and each push
+    // used to force a full re-render and re-scroll — coalescing to one paint per
+    // animation frame keeps it visually smooth without dropping any text.
     stream: () => {
-      let el = null, buf = "";
+      let el = null, buf = "", raf = null;
+      const paint = () => {
+        raf = null;
+        if (!el) el = add("bot", "");
+        renderProse(el, buf);
+      };
       return {
         push(t) {
           clearThinking();
           buf += t;
-          if (!el) el = add("bot", "");
-          renderProse(el, buf);
+          if (raf == null) raf = requestAnimationFrame(paint);
         },
-        close() { if (el && !buf.trim()) el.remove(); },
+        close() {
+          if (raf != null) { cancelAnimationFrame(raf); paint(); }
+          if (el && !buf.trim()) el.remove();
+        },
       };
     },
 
