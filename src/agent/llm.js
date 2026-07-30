@@ -1,8 +1,11 @@
 // Model providers, called directly from the page.
 //
-// Three are supported: Anthropic, Google Gemini, and an OpenAI-compatible adapter
-// pointed at DeepInfra. All three allow browser-origin calls with a user-supplied key —
-// Anthropic needs an explicit opt-in header, Gemini and DeepInfra serve CORS by default.
+// Three are supported: Anthropic, Google Gemini, and an OpenAI-compatible adapter that
+// defaults to DeepInfra but can be pointed at any OpenAI-compatible Chat Completions
+// host (including a local server) via the Base URL field in ⚙. All three allow
+// browser-origin calls with a user-supplied key — Anthropic needs an explicit opt-in
+// header, Gemini and DeepInfra serve CORS by default; a custom endpoint must serve CORS
+// itself, since there is no proxy either way.
 // That keeps the "serve a folder and open a page" story intact, at the cost of the key
 // being readable by anything on this origin. Two consequences are handled rather than
 // merely noted:
@@ -20,6 +23,7 @@ export class LLMError extends Error {}
 const PROVIDER_STORE = "ptero-provider";
 const keyStore = (id) => `ptero-key-${id}`;
 const modelStore = (id) => `ptero-model-${id}`;
+const baseUrlStore = (id) => `ptero-baseurl-${id}`;
 
 // Storage went per-provider when Gemini was added. Carry over anything saved under the
 // single-provider names so an existing key doesn't silently vanish on upgrade.
@@ -56,6 +60,15 @@ export function getModel(id = getProviderId()) {
 }
 export function setModel(m, id = getProviderId()) {
   m?.trim() ? localStorage.setItem(modelStore(id), m.trim()) : localStorage.removeItem(modelStore(id));
+}
+
+// Only providers that opt in (currently just `openai`, via `defaultBaseUrl`) use this —
+// Anthropic and Gemini have fixed hosts.
+export function getBaseUrl(id = getProviderId()) {
+  return localStorage.getItem(baseUrlStore(id)) || PROVIDERS[id].defaultBaseUrl;
+}
+export function setBaseUrl(u, id = getProviderId()) {
+  u?.trim() ? localStorage.setItem(baseUrlStore(id), u.trim()) : localStorage.removeItem(baseUrlStore(id));
 }
 
 function requireKey() {
@@ -346,11 +359,13 @@ const gemini = {
   },
 };
 
-// ---- OpenAI-compatible (DeepInfra) -----------------------------------------------------
-// DeepInfra hosts open-weight models behind an OpenAI-compatible Chat Completions API
-// (docs.deepinfra.com), so this adapter speaks the OpenAI wire format rather than a
-// bespoke one. Swapping OPENAI_BASE would point it at any other OpenAI-compatible host.
-const OPENAI_BASE = "https://api.deepinfra.com/v1/openai";
+// ---- OpenAI-compatible ------------------------------------------------------------------
+// Speaks the OpenAI Chat Completions wire format rather than a bespoke one, so it works
+// against any OpenAI-compatible host — the Base URL field in ⚙ (backed by
+// getBaseUrl/setBaseUrl above) selects it per provider id, e.g. a local server. Defaults
+// to DeepInfra (docs.deepinfra.com), which hosts open-weight models behind this API and
+// needs no local setup.
+const OPENAI_DEFAULT_BASE = "https://api.deepinfra.com/v1/openai";
 
 function openaiTools(tools) {
   if (!tools?.length) return undefined;
@@ -405,19 +420,26 @@ function openaiMessages(system, messages) {
 
 const openai = {
   id: "openai",
-  label: "OpenAI-compatible (DeepInfra)",
+  label: "OpenAI-compatible",
   defaultModel: "deepseek-ai/DeepSeek-V3",
+  defaultBaseUrl: OPENAI_DEFAULT_BASE,
   keyPlaceholder: "di-…",
   keyUrl: "https://deepinfra.com/dash/api_keys",
   host: "api.deepinfra.com",
+  // Local/self-hosted OpenAI-compatible servers typically don't check auth, so unlike
+  // Anthropic and Gemini this provider works with no key at all.
+  keyOptional: true,
 
   headers() {
-    return { "content-type": "application/json", "authorization": `Bearer ${requireKey()}` };
+    const key = getKey();
+    const h = { "content-type": "application/json" };
+    if (key) h.authorization = `Bearer ${key}`;
+    return h;
   },
 
   async listModels() {
-    const res = await fetch(`${OPENAI_BASE}/models`, { headers: this.headers() });
-    await checkResponse(res, "DeepInfra");
+    const res = await fetch(`${getBaseUrl()}/models`, { headers: this.headers() });
+    await checkResponse(res, "OpenAI-compatible endpoint");
     const { data } = await res.json();
     return data.map(m => ({ id: m.id, label: m.id }));
   },
@@ -425,7 +447,7 @@ const openai = {
   async send({ system, messages, tools, onText, signal, maxTokens }) {
     let res;
     try {
-      res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+      res = await fetch(`${getBaseUrl()}/chat/completions`, {
         method: "POST",
         headers: this.headers(),
         body: JSON.stringify({
@@ -439,9 +461,9 @@ const openai = {
       });
     } catch (e) {
       if (e.name === "AbortError") throw e;
-      throw new LLMError(`Couldn't reach DeepInfra: ${e.message}`);
+      throw new LLMError(`Couldn't reach ${getBaseUrl()}: ${e.message}`);
     }
-    await checkResponse(res, "DeepInfra");
+    await checkResponse(res, "OpenAI-compatible endpoint");
 
     // Chunks stream `delta.content` fragments and, separately, `delta.tool_calls`
     // fragments keyed by index — id/name arrive once, on a call's first chunk, and

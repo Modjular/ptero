@@ -55,7 +55,18 @@ running on your GPU. Nothing is uploaded anywhere.
     <label for="providersel">Provider</label>
     <select id="providersel"></select>
 
-    <label for="apikey">API key</label>
+    <div id="baseurlfield" hidden>
+      <label for="baseurl">Base URL</label>
+      <input id="baseurl" type="text" spellcheck="false"
+             placeholder="https://api.deepinfra.com/v1/openai">
+      <p class="hint" id="baseurlhint">
+        Defaults to DeepInfra. Point this at any OpenAI-compatible Chat Completions
+        endpoint, e.g. a local server at http://127.0.0.1:8080/v1. A custom endpoint must
+        serve CORS itself — there is no proxy.
+      </p>
+    </div>
+
+    <label for="apikey" id="apikeylabel">API key</label>
     <input id="apikey" type="password" autocomplete="off">
     <p class="hint" id="keyhint"></p>
 

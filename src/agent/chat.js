@@ -3,7 +3,7 @@
 import { Agent } from "./agent.js";
 import {
   PROVIDERS, getProviderId, setProviderId, provider,
-  getKey, setKey, hasKey, getModel, setModel, listModels,
+  getKey, setKey, hasKey, getModel, setModel, getBaseUrl, setBaseUrl, listModels,
 } from "./llm.js";
 import * as cellsMod from "../notebook/cells.js";
 
@@ -62,14 +62,32 @@ function chip(text, cell) {
   }
   logEl.appendChild(el);
   logEl.scrollTop = logEl.scrollHeight;
+  return el;
+}
+
+// A placeholder pill for the gap before any real signal exists — right after a turn
+// starts, or between one tool result and the model's next move. Any actual signal
+// (a note, streamed text, a question) supersedes it, so it's cleared the moment one
+// arrives rather than sitting next to real content.
+let thinkingEl = null;
+function clearThinking() {
+  thinkingEl?.remove();
+  thinkingEl = null;
+}
+function showThinking() {
+  if (thinkingEl) return;
+  thinkingEl = chip("thinking…");
+  thinkingEl.classList.add("chip-thinking");
 }
 
 // ---- the UI object the agent drives ---------------------------------------------------
 function makeUI() {
   return {
-    note: (text, cell) => chip(text, cell),
-    error: (text) => add("err", text),
+    note: (text, cell) => { clearThinking(); chip(text, cell); },
+    error: (text) => { clearThinking(); add("err", text); },
+    thinking: () => showThinking(),
     done: () => {
+      clearThinking();
       sendBtn.disabled = false;
       sendBtn.textContent = "Send";
       inputEl.disabled = false;
@@ -81,6 +99,7 @@ function makeUI() {
       let el = null, buf = "";
       return {
         push(t) {
+          clearThinking();
           buf += t;
           if (!el) el = add("bot", "");
           renderProse(el, buf);
@@ -91,6 +110,7 @@ function makeUI() {
 
     // ask_user: render the question with optional buttons and block until answered.
     ask: (question, options) => new Promise((resolve) => {
+      clearThinking();
       const wrap = document.createElement("div");
       wrap.className = "msg bot ask";
       const q = document.createElement("div");
@@ -176,6 +196,9 @@ function showProviderFields(id) {
   $("keyhint").innerHTML = "";
   $("keyhint").append(
     document.createTextNode(
+      (p.keyOptional
+        ? `Optional — leave blank if ${p.host} doesn't check auth. `
+        : "") +
       `Stored in this browser only and sent straight from this page to ${p.host}. ` +
       `Anything else running on this origin can read it, so use a key you're willing ` +
       `to scope narrowly and rotate. `),
@@ -184,6 +207,12 @@ function showProviderFields(id) {
   a.href = p.keyUrl; a.target = "_blank"; a.rel = "noreferrer";
   a.textContent = "Get a key";
   $("keyhint").append(a);
+  $("apikeylabel").textContent = p.keyOptional ? "API key (optional)" : "API key";
+  $("baseurlfield").hidden = !p.defaultBaseUrl;
+  if (p.defaultBaseUrl) {
+    $("baseurl").value = getBaseUrl(id);
+    $("baseurl").placeholder = p.defaultBaseUrl;
+  }
   $("modelhint").textContent = "Keys and model choices are remembered per provider.";
 }
 
@@ -206,8 +235,12 @@ function openSettings() {
 async function loadModelList() {
   const btn = $("loadmodels");
   const typed = $("apikey").value;
-  if (!typed.trim()) { $("modelhint").textContent = "Enter a key first."; return; }
+  if (!typed.trim() && !PROVIDERS[editingProvider].keyOptional) {
+    $("modelhint").textContent = "Enter a key first.";
+    return;
+  }
   setKey(typed, editingProvider);
+  if (PROVIDERS[editingProvider].defaultBaseUrl) setBaseUrl($("baseurl").value, editingProvider);
   const previous = getProviderId();
   setProviderId(editingProvider);
   btn.disabled = true;
@@ -236,6 +269,7 @@ async function loadModelList() {
 function saveSettings() {
   setKey($("apikey").value, editingProvider);
   setModel($("modelname").value, editingProvider);
+  if (PROVIDERS[editingProvider].defaultBaseUrl) setBaseUrl($("baseurl").value, editingProvider);
   setProviderId(editingProvider);
   $("settings").close();
   updateGate();
@@ -243,7 +277,7 @@ function saveSettings() {
 }
 
 function updateGate() {
-  const ready = hasKey();
+  const ready = provider().keyOptional || hasKey();
   inputEl.disabled = !ready;
   sendBtn.disabled = !ready;
   inputEl.placeholder = ready

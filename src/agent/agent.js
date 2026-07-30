@@ -20,7 +20,7 @@ const MAX_STEPS = 24;
 
 export class Agent {
   constructor(ui) {
-    this.ui = ui;              // { say, note, ask, stream, done, error }
+    this.ui = ui;              // { note, ask, stream, thinking, done, error }
     this.messages = [];        // full history, including tool results
     this.busy = false;
     this.controller = null;
@@ -40,6 +40,7 @@ export class Agent {
 
     try {
       while (steps++ < MAX_STEPS) {
+        this.ui.thinking();
         const stream = this.ui.stream();
         let reply;
         try {
@@ -99,6 +100,7 @@ export class Agent {
               `from them to get past it. Do not include stack traces or Python error ` +
               `text; describe the problem in their terms.`,
           });
+          this.ui.thinking();
           const stream = this.ui.stream();
           try {
             const final = await send({

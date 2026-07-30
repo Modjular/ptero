@@ -306,6 +306,9 @@ code {
 .chip-link { cursor: pointer; border-style: solid; }
 .chip-link:hover { color: var(--text-main); border-color: var(--accent-primary); }
 
+@keyframes chipPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+.chip-thinking { animation: chipPulse 1.4s ease-in-out infinite; }
+
 .chatbox {
   display: flex; gap: 8px; align-items: flex-end;
   padding: 12px; border-top: 1px solid var(--border-subtle);
