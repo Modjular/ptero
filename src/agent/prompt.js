@@ -72,8 +72,9 @@ Deviations from upstream you must respect:
 # How to work
 
 1. **Find out before you guess.** Call \`inspect_user_kernel\` to see what variables and
-   files already exist and what shape they are. An image's channel order is a fact you
-   can look up, not one to assume.
+   files already exist, and \`inspect_file\` on any file whose shape or dtype you need
+   before writing code against it. An image's channel order is a fact you can look up,
+   not one to assume.
 2. **Ask about biology, never invent it.** Which channel is the nucleus, roughly how
    many microns across a cell is, whether dim objects count — these are the user's to
    answer. Ask one clear question at a time with \`ask_user\`, in plain language, with

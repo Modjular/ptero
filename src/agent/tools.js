@@ -1,10 +1,11 @@
 // The agent's tools: what it can actually do to the notebook and the kernels.
 //
-// harness_v1 specified three (test_in_scratch, push_to_ui, ask_user). Two more are
+// harness_v1 specified three (test_in_scratch, push_to_ui, ask_user). Three more are
 // here because that spec's own workflow implies them: without `inspect_user_kernel`
-// the mock shapes handed to test_in_scratch are guesses, and without
-// `read_cell_result` the agent is blind to the single most likely next event — the
-// person pressing ▶ on a pushed cell and getting an error.
+// the mock shapes handed to test_in_scratch are guesses, without `inspect_file` the
+// agent has to load a whole file into the kernel just to learn its shape and dtype,
+// and without `read_cell_result` the agent is blind to the single most likely next
+// event — the person pressing ▶ on a pushed cell and getting an error.
 import * as cellsMod from "../notebook/cells.js";
 import * as kernel from "../kernel.js";
 import { catalogue } from "../registry.js";
@@ -20,6 +21,22 @@ export const SCHEMAS = [
       "before choosing mock shapes for test_in_scratch — guessing an image's shape or " +
       "channel count is the most common cause of code that fails on the user's data.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "inspect_file",
+    description:
+      "Get metadata for one file in the workspace — byte size, and where the format " +
+      "allows it, image shape/dtype (TIFF, PNG/JPEG/BMP/GIF, .npy/.npz) or column names " +
+      "(CSV/TSV) — without loading it into a notebook variable. Use this after " +
+      "inspect_user_kernel lists a file whose shape or dtype you need, e.g. to pick " +
+      "mock shapes for test_in_scratch or to tell channel-first from channel-last data.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Filename as it appears in the workspace listing." },
+      },
+      required: ["name"],
+    },
   },
   {
     name: "test_in_scratch",
@@ -138,6 +155,27 @@ export async function runTool(name, input, ui) {
              `\n\nNotebook cells:\n${cellList}` +
              `\n\nAvailable models:\n` +
              catalogue().map(m => `  ${m.id} — ${m.good_for}`).join("\n");
+    }
+
+    case "inspect_file": {
+      if (!input.name?.trim()) throw new Error("inspect_file needs a name");
+      ui.note(`inspecting ${input.name}`);
+      const info = await kernel.describeFile(input.name);
+      if (info.error && !info.bytes) return `${input.name}: ${info.error}`;
+      const bits = [
+        info.ext && `type=${info.ext}`,
+        info.bytes != null && `size=${info.bytes} bytes`,
+        info.shape && `shape=${info.shape}`,
+        info.dtype && `dtype=${info.dtype}`,
+        info.axes && `axes=${info.axes}`,
+        info.pages != null && `pages=${info.pages}`,
+        info.format && `format=${info.format}`,
+        info.columns && `columns=[${info.columns.join(", ")}]`,
+        info.rows != null && `rows=${info.rows}`,
+        info.members && `members=${JSON.stringify(info.members)}`,
+        info.kind && info.kind,
+      ].filter(Boolean).join(" ");
+      return info.error ? `${input.name}: ${bits} (${info.error})` : `${input.name}: ${bits}`;
     }
 
     case "test_in_scratch": {

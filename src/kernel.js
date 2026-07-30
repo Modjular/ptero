@@ -174,6 +174,13 @@ async function ensureTifffile(src) {
   tifffileReady = true;
 }
 
+let pillowReady = false;
+async function ensurePillow() {
+  if (pillowReady) return;
+  await pyodide.loadPackage("Pillow");
+  pillowReady = true;
+}
+
 async function ensurePackages(src) {
   // Pyodide scans the source for import statements and fetches only what it names;
   // already-loaded packages are a no-op on repeat calls.
@@ -302,6 +309,80 @@ def _ptero_describe():
     except OSError: files = []
     return json.dumps({'vars': out, 'files': files})
 _ptero_describe()
+`);
+  return JSON.parse(json);
+}
+
+/**
+ * Metadata for one file in the workspace, without loading it into a notebook variable:
+ * byte size plus, where the format allows it, shape/dtype read from the file's own
+ * header rather than a full decode. TIFF and PNG/JPEG/BMP/GIF go through tifffile /
+ * Pillow's lazy `Image.open`, both of which read dimensions without decoding pixels;
+ * .npy uses `mmap_mode` for the same reason. This is what lets the agent describe an
+ * image's shape and dtype before ever running a cell that loads it (see
+ * agent/tools.js `inspect_file`).
+ */
+export async function describeFile(name) {
+  if (!pyodide) throw new Error("kernel not booted");
+  const ext = (name.includes(".") ? name.split(".").pop() : "").toLowerCase();
+  if (["tif", "tiff"].includes(ext)) await ensureTifffile("import tifffile");
+  if (["png", "jpg", "jpeg", "bmp", "gif"].includes(ext)) await ensurePillow();
+  if (ext === "npy" || ext === "npz") await pyodide.loadPackage("numpy");
+
+  const json = pyodide.runPython(String.raw`
+def _ptero_inspect_file(name):
+    import json, os
+    ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+    info = {'name': name, 'ext': ext}
+    try:
+        info['bytes'] = os.path.getsize(name)
+    except OSError as e:
+        return json.dumps({'name': name, 'error': str(e)})
+
+    try:
+        if ext in ('tif', 'tiff'):
+            import tifffile
+            with tifffile.TiffFile(name) as tf:
+                series = tf.series[0]
+                info['shape'] = str(series.shape)
+                info['dtype'] = str(series.dtype)
+                info['axes'] = series.axes
+                info['pages'] = len(tf.pages)
+        elif ext in ('png', 'jpg', 'jpeg', 'bmp', 'gif'):
+            from PIL import Image
+            with Image.open(name) as im:
+                bands = len(im.getbands())
+                info['shape'] = str((im.height, im.width) if bands == 1
+                                     else (im.height, im.width, bands))
+                info['dtype'] = im.mode
+                info['format'] = im.format
+        elif ext == 'npy':
+            import numpy as np
+            arr = np.load(name, mmap_mode='r')
+            info['shape'] = str(arr.shape)
+            info['dtype'] = str(arr.dtype)
+        elif ext == 'npz':
+            import numpy as np
+            with np.load(name) as z:
+                info['members'] = {k: {'shape': str(z[k].shape), 'dtype': str(z[k].dtype)}
+                                    for k in z.files}
+        elif ext in ('csv', 'tsv'):
+            with open(name, newline='') as f:
+                header = f.readline().rstrip('\n')
+                nrows = sum(1 for _ in f)
+            sep = '\t' if ext == 'tsv' else ','
+            info['columns'] = header.split(sep)
+            info['rows'] = nrows
+        elif ext == 'json':
+            with open(name) as f:
+                val = json.load(f)
+            info['kind'] = (f'object with {len(val)} keys' if isinstance(val, dict)
+                             else f'array of {len(val)}' if isinstance(val, list)
+                             else type(val).__name__)
+    except Exception as e:
+        info['error'] = f'{type(e).__name__}: {e}'
+    return json.dumps(info)
+_ptero_inspect_file(${JSON.stringify(name)})
 `);
   return JSON.parse(json);
 }
