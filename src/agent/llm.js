@@ -418,6 +418,44 @@ function openaiMessages(system, messages) {
   return out;
 }
 
+// Some open-weight "reasoning" models served through generic OpenAI-compatible APIs
+// inline their chain-of-thought as literal <think>...</think> text in `delta.content`,
+// rather than a separate structured field the way DeepSeek's own API does (a
+// `reasoning_content` field would just go unread by the code below — nothing to filter
+// there). This is the same context-protection principle the rest of the agent already
+// enforces for tracebacks: the model may think out loud, the user never sees it. Tags
+// can straddle chunk boundaries, so this is a small streaming state machine rather than
+// a regex run once over the full text.
+function thinkFilter() {
+  const OPEN = "<think>", CLOSE = "</think>";
+  let mode = "visible", pending = "";
+  const findCI = (s, needle) => s.toLowerCase().indexOf(needle);
+  function feed(chunk) {
+    pending += chunk;
+    let out = "";
+    for (;;) {
+      const needle = mode === "visible" ? OPEN : CLOSE;
+      const i = findCI(pending, needle);
+      if (i === -1) {
+        // Hold back only a tail that could still be the start of the tag we're
+        // watching for — everything before that is safe to emit (or discard) now.
+        const hold = Math.min(pending.length, needle.length - 1);
+        if (mode === "visible") out += pending.slice(0, pending.length - hold);
+        pending = pending.slice(pending.length - hold);
+        return out;
+      }
+      if (mode === "visible") out += pending.slice(0, i);
+      pending = pending.slice(i + needle.length);
+      mode = mode === "visible" ? "thinking" : "visible";
+    }
+  }
+  // Whatever's still held back when the stream ends was never going to complete a tag:
+  // in visible mode that's just ordinary trailing text, in thinking mode it's an
+  // unterminated <think> block, which stays hidden rather than leaking half of it.
+  const finish = () => (mode === "visible" ? pending : "");
+  return { feed, finish };
+}
+
 const openai = {
   id: "openai",
   label: "OpenAI-compatible",
@@ -471,19 +509,25 @@ const openai = {
     let text = "";
     const calls = new Map();
     let stopReason = null;
+    const think = thinkFilter();
     await readSSE(res, (ev) => {
       if (ev.error) throw new LLMError(ev.error.message || "stream error");
       const choice = ev.choices?.[0];
       if (!choice) return;
       stopReason = choice.finish_reason ?? stopReason;
       const delta = choice.delta ?? {};
-      if (delta.content) { text += delta.content; onText?.(delta.content); }
+      if (delta.content) {
+        const visible = think.feed(delta.content);
+        if (visible) { text += visible; onText?.(visible); }
+      }
       for (const tc of delta.tool_calls ?? []) {
         let call = calls.get(tc.index);
         if (!call) calls.set(tc.index, call = { id: tc.id, name: tc.function?.name, args: "" });
         if (tc.function?.arguments) call.args += tc.function.arguments;
       }
     });
+    const tail = think.finish();
+    if (tail) { text += tail; onText?.(tail); }
     const content = [];
     if (text) content.push({ type: "text", text });
     for (const call of calls.values()) {
