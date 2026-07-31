@@ -142,7 +142,7 @@ const anthropic = {
     return data.map(m => ({ id: m.id, label: m.display_name || m.id }));
   },
 
-  async send({ system, messages, tools, onText, signal, maxTokens }) {
+  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens }) {
     let res;
     try {
       res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -169,6 +169,11 @@ const anthropic = {
         blocks[ev.index] = b.type === "tool_use"
           ? { type: "tool_use", id: b.id, name: b.name, _json: "" }
           : { type: "text", text: "" };
+        // The model's tool-call arguments (e.g. a whole scratch-test draft) can take a
+        // few seconds to stream as `input_json_delta` chunks, and none of that text is
+        // shown anywhere — onText only fires for text blocks. Without this, the UI goes
+        // silent the instant the preceding prose block ends, which reads as a freeze.
+        if (b.type === "tool_use") onToolStart?.();
       } else if (ev.type === "content_block_delta") {
         const b = blocks[ev.index];
         if (!b) return;
@@ -304,7 +309,7 @@ const gemini = {
       .map(m => ({ id: m.name.replace(/^models\//, ""), label: m.displayName || m.name }));
   },
 
-  async send({ system, messages, tools, onText, signal, maxTokens }) {
+  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens }) {
     const model = getModel();
     let res;
     try {
@@ -344,6 +349,7 @@ const gemini = {
           else content.push({ type: "text", text: part.text });
           onText?.(part.text);
         } else if (part.functionCall) {
+          onToolStart?.();
           content.push({
             type: "tool_use",
             // Gemini has no call ids; synthesise stable ones so tool_result blocks in
@@ -482,7 +488,7 @@ const openai = {
     return data.map(m => ({ id: m.id, label: m.id }));
   },
 
-  async send({ system, messages, tools, onText, signal, maxTokens }) {
+  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens }) {
     let res;
     try {
       res = await fetch(`${getBaseUrl()}/chat/completions`, {
@@ -522,7 +528,13 @@ const openai = {
       }
       for (const tc of delta.tool_calls ?? []) {
         let call = calls.get(tc.index);
-        if (!call) calls.set(tc.index, call = { id: tc.id, name: tc.function?.name, args: "" });
+        if (!call) {
+          calls.set(tc.index, call = { id: tc.id, name: tc.function?.name, args: "" });
+          // As with Anthropic, `function.arguments` streams as its own run of chunks
+          // after this one with no visible signal — surface the call starting instead
+          // of leaving the UI silent until it's fully assembled.
+          onToolStart?.();
+        }
         if (tc.function?.arguments) call.args += tc.function.arguments;
       }
     });
@@ -546,8 +558,8 @@ const openai = {
 export const PROVIDERS = { anthropic, gemini, openai };
 
 // ---- dispatch ---------------------------------------------------------------------------
-export async function send({ system, messages, tools, onText, signal, maxTokens = 4096 }) {
-  return provider().send({ system, messages, tools, onText, signal, maxTokens });
+export async function send({ system, messages, tools, onText, onToolStart, signal, maxTokens = 4096 }) {
+  return provider().send({ system, messages, tools, onText, onToolStart, signal, maxTokens });
 }
 
 export async function listModels() {

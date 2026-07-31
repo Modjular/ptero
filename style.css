@@ -292,7 +292,13 @@ code {
   white-space: pre; overflow-x: auto;
 }
 .ask-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
-.ask-opts button { padding: 4px 11px; font-size: 12px; border-radius: var(--radius-sm); }
+.ask-opts button {
+    padding: 4px 11px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+    text-align: justify;
+    width: 100%;
+}
 
 /* Activity chips: enough to see the agent working, never a debug log. */
 .chip {

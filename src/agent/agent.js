@@ -49,6 +49,10 @@ export class Agent {
             messages: this.messages,
             tools: SCHEMAS,
             onText: (t) => stream.push(t),
+            // A tool call's arguments (e.g. a scratch-test draft) stream invisibly after
+            // any preceding prose — nothing else marks that gap, so without this the chat
+            // looks frozen the moment the model stops talking and starts drafting.
+            onToolStart: () => this.ui.thinking(),
             signal: this.controller.signal,
           });
         } finally {
