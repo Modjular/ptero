@@ -313,7 +313,10 @@ code {
 .chip-link:hover { color: var(--text-main); border-color: var(--accent-primary); }
 
 @keyframes chipPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
-.chip-thinking { animation: chipPulse 1.4s ease-in-out infinite; }
+@keyframes chipIn { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+/* Settles in over a beat rather than popping in the instant the preceding sentence
+   finishes, so the two don't read as one jumbled event. */
+.chip-thinking { animation: chipIn .18s ease-out, chipPulse 1.4s ease-in-out .18s infinite; }
 
 .chatbox {
   display: flex; gap: 8px; align-items: flex-end;

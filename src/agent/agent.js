@@ -51,8 +51,10 @@ export class Agent {
             onText: (t) => stream.push(t),
             // A tool call's arguments (e.g. a scratch-test draft) stream invisibly after
             // any preceding prose — nothing else marks that gap, so without this the chat
-            // looks frozen the moment the model stops talking and starts drafting.
-            onToolStart: () => this.ui.thinking(),
+            // looks frozen the moment the model stops talking and starts drafting. Routed
+            // through the stream itself (not ui.thinking() directly) so the sentence in
+            // flight gets flushed before the chip appears, instead of the two colliding.
+            onToolStart: () => stream.toolStarting(),
             signal: this.controller.signal,
           });
         } finally {

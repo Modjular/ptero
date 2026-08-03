@@ -117,6 +117,20 @@ function makeUI() {
           buf += t;
           if (raf == null) raf = requestAnimationFrame(paint);
         },
+
+        // The model can start streaming a tool call's arguments the instant its last
+        // sentence ends, with no gap for us to detect — so without care the "thinking…"
+        // chip lands in the *same* paint as the tail of the sentence, and the two read
+        // as one garbled event instead of "it finished talking, then it paused". Flush
+        // whatever prose is still buffered right now, synchronously, so the sentence is
+        // committed to the DOM in full — then push the chip to the next frame so the
+        // browser actually paints the finished sentence on its own before the chip
+        // appears next to it.
+        toolStarting() {
+          if (raf != null) { cancelAnimationFrame(raf); paint(); }
+          requestAnimationFrame(showThinking);
+        },
+
         close() {
           if (raf != null) { cancelAnimationFrame(raf); paint(); }
           if (el && !buf.trim()) el.remove();
