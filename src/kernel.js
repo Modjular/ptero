@@ -389,33 +389,48 @@ _ptero_inspect_file(${JSON.stringify(name)})
 
 // ---- workspace --------------------------------------------------------------------
 let nativefs = null;
+let workspaceHandle = null;
 
-// Emscripten's syncfs is bidirectional and treats "local doesn't know about this
-// entry" as "delete it" on whichever side is the destination. `nativefs.syncfs()`
-// (what mountNativeFS() hands back) only ever runs it as a *push* — pyodide's mem FS
-// as source of truth, the real folder as destination — so a file dropped into the
-// folder from outside the tab (Finder, another process, a second window), which
-// pyodide's mem FS has no node for, reads as "shouldn't exist" and gets deleted from
-// the real folder. Confirmed by direct repro, not just inferred from the source.
+// Emscripten's `FS.syncfs(populate, cb)` is a destructive bidirectional sync: whichever
+// side it treats as the *destination* gets any entry the other side doesn't recognise
+// deleted out from under it. populate=false (push) deletes real-folder files pyodide's
+// mem FS has no node for — a file dropped in from outside the tab (Finder, another
+// process, a second window). populate=true (pull) does the mirror-image thing to mem
+// FS — which includes a file a cell just wrote with e.g. `df.to_csv(...)` and hasn't
+// been pushed out yet, so a pull run right after erases it before the push that would
+// have persisted it ever runs. Both directions were confirmed destructive by direct
+// repro; running pull before push (a previous fix here) only swapped which bug you hit.
 //
-// A *pull* first — populate=true, real folder as source — closes that gap: it can
-// only ever add or remove nodes in pyodide's own mem FS mirror, never touch the real
-// folder, so it's safe to run unconditionally. Once local knows about every file the
-// pull found, a push after it can no longer mistake any of them for garbage. Both
-// directions go through the raw global `pyodide.FS.syncfs`, not the `nativefs`
-// object's own one-directional method, because that's the only way to request a pull
-// at all — and it also means picking up externally-added files no longer needs the
-// unmount+remount dance a previous fix here relied on (mountNativeFS's own populate
-// pull was never the part that was missing; a *safe* push was).
-function fsSyncfs(populate) {
-  return new Promise((resolve, reject) => {
-    pyodide.FS.syncfs(populate, (err) => (err ? reject(err) : resolve()));
-  });
+// So neither direction goes through the raw syncfs at all. Both are reimplemented by
+// hand, additive-only: a pull copies in anything the real folder has that mem FS
+// hasn't seen yet, never touching a name mem FS already knows (mem FS is authoritative
+// for anything it's seen — including a file written a moment ago and not yet on disk).
+// A push writes mem FS's copy of every name it knows out to the real folder, creating
+// or overwriting, but never deletes a real-folder entry it has no opinion about. Net
+// effect: sync can only ever gain files, on either side, never lose one.
+async function pullNewFiles() {
+  for await (const [name, entry] of workspaceHandle.entries()) {
+    if (entry.kind !== "file") continue;
+    try { pyodide.FS.stat(`/workspace/${name}`); continue; } catch { /* not seen yet */ }
+    const buf = new Uint8Array(await (await entry.getFile()).arrayBuffer());
+    pyodide.FS.writeFile(`/workspace/${name}`, buf);
+  }
+}
+
+async function pushKnownFiles() {
+  const names = pyodide.FS.readdir("/workspace").filter(n => n !== "." && n !== "..");
+  for (const name of names) {
+    const data = pyodide.FS.readFile(`/workspace/${name}`);
+    const fileHandle = await workspaceHandle.getFileHandle(name, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(data);
+    await writable.close();
+  }
 }
 
 async function syncBothWays() {
-  await fsSyncfs(true);
-  await fsSyncfs(false);
+  await pullNewFiles();
+  await pushKnownFiles();
 }
 
 export async function mountWorkspace(handle) {
@@ -426,17 +441,17 @@ export async function mountWorkspace(handle) {
   } else {
     try { pyodide.FS.mkdir("/workspace"); } catch { /* exists */ }
   }
+  workspaceHandle = handle;
   nativefs = await pyodide.mountNativeFS("/workspace", handle);
   pyodide.runPython("import os; os.chdir('/workspace')");
 }
 
 export function hasWorkspace() { return nativefs !== null; }
 
-/** Flush pending writes to disk and list what's there now — pulling first (see
- * syncBothWays above) so files added from outside the tab both show up *and*, more
- * importantly, are never mistaken for something to delete. Called after every cell
- * run as well as on an explicit refresh; there's no cheaper partial sync that's still
- * safe, since any push needs the preceding pull to know what not to delete. */
+/** Flush pending writes to disk and list what's there now — pulling first so files
+ * added from outside the tab show up, then pushing so anything a cell just wrote lands
+ * on disk; see the additive-only sync above for why neither step can lose a file.
+ * Called after every cell run as well as on an explicit refresh. */
 export async function syncWorkspace() {
   if (!pyodide) return [];
   if (nativefs) await syncBothWays();
