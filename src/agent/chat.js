@@ -22,8 +22,8 @@ function add(cls, text) {
   return el;
 }
 
-// Minimal markdown: fenced code and inline `code` are the only things the agent
-// reliably emits that plain text would mangle. Everything is inserted as text nodes.
+// Minimal markdown: fenced code, inline `code`, **bold**, and *italics*.
+// Everything is safely inserted as text nodes to prevent XSS.
 //
 // `.msg` renders with `white-space: pre-wrap`, so a leading/trailing blank line in the
 // model's raw text — a completely ordinary way for it to format a reply — shows up as
@@ -32,26 +32,57 @@ function add(cls, text) {
 function renderProse(el, raw) {
   el.replaceChildren();
   const trimmed = raw.replace(/^\n+/, "").replace(/\n+$/, "");
+  
+  // 1. Split by fenced code blocks
   for (const [i, part] of trimmed.split(/```(?:\w+\n|\n)?/).entries()) {
     if (!part) continue;
+    
     if (i % 2) {
       const pre = document.createElement("pre");
       pre.className = "msg-code";
       pre.textContent = part.replace(/^\n+/, "").replace(/\n+$/, "");
       el.appendChild(pre);
     } else {
+      
+      // 2. Split by inline code
       for (const [j, chunk] of part.split("`").entries()) {
         if (!chunk) continue;
+        
         if (j % 2) {
           const c = document.createElement("code");
           c.textContent = chunk;
           el.appendChild(c);
         } else {
-          el.appendChild(document.createTextNode(chunk));
+          
+          // 3. Split plain text by bold/italic markers
+          // The capturing group ( ) ensures the matched delimiters are kept in the array
+          const textTokens = chunk.split(/(\*\*[\s\S]+?\*\*|__[\s\S]+?__|\*[\s\S]+?\*|_[\s\S]+?_)/);
+          
+          for (const token of textTokens) {
+            if (!token) continue;
+            
+            if (token.startsWith("**") && token.endsWith("**") || 
+                token.startsWith("__") && token.endsWith("__")) {
+              const strong = document.createElement("strong");
+              strong.textContent = token.slice(2, -2); // Strip the 2 delimiter chars
+              el.appendChild(strong);
+            } 
+            else if (token.startsWith("*") && token.endsWith("*") || 
+                     token.startsWith("_") && token.endsWith("_")) {
+              const em = document.createElement("em");
+              em.textContent = token.slice(1, -1); // Strip the 1 delimiter char
+              el.appendChild(em);
+            } 
+            else {
+              el.appendChild(document.createTextNode(token));
+            }
+          }
         }
       }
     }
   }
+  
+  // Assuming logEl is defined in your broader scope
   logEl.scrollTop = logEl.scrollHeight;
 }
 
