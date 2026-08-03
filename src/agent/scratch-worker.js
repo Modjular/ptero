@@ -7,7 +7,10 @@
 // freeze the notebook the person is actually using.
 //
 // It loads no weights and touches no GPU — see shims/_ptero_mock.py for why testing
-// against synthetic label maps is the right trade here.
+// against synthetic label maps is the right trade here. The workspace folder's real
+// files ARE available at /workspace, read-only-by-construction (see mountWorkspace
+// below) — a draft that loads the user's actual image is exactly what we want to catch
+// shape/dtype mistakes before push_to_ui, it's only segmentation itself that stays fake.
 importScripts("https://cdn.jsdelivr.net/pyodide/v0.28.0/full/pyodide.js");
 
 const SHIM_FILES = [
@@ -24,6 +27,8 @@ let py = null;
 let out = [];
 let mockInstalled = false;
 let tifffileReady = false;
+let workspaceHandle = null;
+let workspaceReady = false;
 
 const imports = (src, name) => new RegExp(`\\b(?:import|from)\\s+${name}\\b`).test(src);
 
@@ -74,6 +79,39 @@ async function boot(shimBase, catalogueJson) {
     JSON.stringify({ gpu: "mocked (scratch kernel)", models: [], resident: [] });
 }
 
+// Real files, copied in, never mounted. kernel.js mounts the actual directory handle
+// with readwrite permission for the notebook kernel; that permission grant is shared by
+// anything holding an equivalent handle to the same directory, so a native mount here
+// would inherit write access too, no matter what mode we requested. Copying bytes once
+// into this worker's own in-memory FS sidesteps that entirely — draft code can delete,
+// truncate or overwrite its `/workspace` freely and the real folder never sees it,
+// because after this copy there is no reference to the real handle left in Python's
+// reach at all. Additive-only, same reasoning as kernel.js's pullNewFiles: a name this
+// FS already has is left alone, so a test run can't undo a copy a previous one made.
+async function pullWorkspaceFiles() {
+  if (!workspaceHandle) return;
+  for await (const [name, entry] of workspaceHandle.entries()) {
+    if (entry.kind !== "file") continue;
+    try { py.FS.stat(`/workspace/${name}`); continue; } catch { /* not seen yet */ }
+    const buf = new Uint8Array(await (await entry.getFile()).arrayBuffer());
+    py.FS.writeFile(`/workspace/${name}`, buf);
+  }
+}
+
+// Called on every test() that has a handle, so a folder chosen — or changed, or added
+// to — mid-conversation shows up without the agent needing to know that happened.
+// pullWorkspaceFiles is cheap to call repeatedly: an unchanged folder costs one
+// directory listing and a stat per name, no bytes moved.
+async function mountWorkspace(handle) {
+  if (!workspaceReady) {
+    try { py.FS.mkdir("/workspace"); } catch { /* exists */ }
+    py.runPython("import os; os.chdir('/workspace')");
+    workspaceReady = true;
+  }
+  workspaceHandle = handle;
+  await pullWorkspaceFiles();
+}
+
 async function ensureDeps(src) {
   await py.loadPackagesFromImports(src);
   const usesShim = SHIM_ROOTS.some(name => imports(src, name));
@@ -97,8 +135,9 @@ async function ensureDeps(src) {
 }
 
 // Build the mock variables the draft expects to find, then run it.
-async function test({ code, vars = [] }) {
+async function test({ code, vars = [], workspaceHandle: handle }) {
   out = [];
+  if (handle) await mountWorkspace(handle);
   const setup = [];
   if (vars.length) {
     await py.loadPackage("numpy");

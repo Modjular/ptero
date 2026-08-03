@@ -1,5 +1,6 @@
 // Main-thread handle for the scratch kernel Worker.
 import { catalogue } from "../registry.js";
+import { getWorkspaceHandle } from "../kernel.js";
 
 let worker = null;
 let booting = null;
@@ -43,7 +44,11 @@ export function ensureScratch() {
 
 export async function testInScratch({ code, vars }) {
   await ensureScratch();
-  return send("test", { code, vars });
+  // Handing the handle over on every call (rather than once, at boot) is what lets a
+  // folder chosen mid-conversation, or picked before the agent ever boots the worker,
+  // show up without extra plumbing. The worker copies from it read-only; see
+  // scratch-worker.js's mountWorkspace.
+  return send("test", { code, vars, workspaceHandle: getWorkspaceHandle() });
 }
 
 export async function resetScratch() {

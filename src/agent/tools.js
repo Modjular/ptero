@@ -42,10 +42,14 @@ export const SCHEMAS = [
     name: "test_in_scratch",
     description:
       "Run code in a hidden scratch kernel to check it works, before the user ever " +
-      "sees it. Segmentation is mocked there — it returns synthetic label maps of the " +
-      "right shape and dtype, so this verifies your analysis code, not the biology. " +
-      "Never adjust segmentation thresholds based on object counts from here; they are " +
-      "not real. Returns stdout, the result, any error, and the resulting variables.",
+      "sees it. The workspace's real files are readable here by their real names — " +
+      "prefer `io.imread(\"Composite.tif\")` etc. over a mock var whenever the file " +
+      "already exists, it catches real shape/dtype mistakes that a synthetic array " +
+      "can't. The one thing still fake is segmentation: it returns synthetic label maps " +
+      "of the right shape and dtype, so this verifies your analysis code, not the " +
+      "biology. Never adjust segmentation thresholds based on object counts from here; " +
+      "they are not real. Returns stdout, the result, any error, and the resulting " +
+      "variables.",
     input_schema: {
       type: "object",
       properties: {
@@ -53,8 +57,10 @@ export const SCHEMAS = [
         vars: {
           type: "array",
           description:
-            "Stand-in inputs to create before running, e.g. the image the real code " +
-            "would have loaded. Use shapes taken from inspect_user_kernel where possible.",
+            "Stand-in inputs to create before running — only for data that doesn't " +
+            "already exist as a file, e.g. an intermediate array the real code would " +
+            "compute. A file already in the workspace needs no entry here; read it by " +
+            "name instead. Use shapes taken from inspect_user_kernel where possible.",
           items: {
             type: "object",
             properties: {

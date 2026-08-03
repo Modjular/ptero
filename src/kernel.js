@@ -448,6 +448,10 @@ export async function mountWorkspace(handle) {
 
 export function hasWorkspace() { return nativefs !== null; }
 
+// For the scratch worker: it copies real files in by name rather than mounting the
+// handle itself, so it never inherits the readwrite grant given here — see scratch.js.
+export function getWorkspaceHandle() { return workspaceHandle; }
+
 /** Flush pending writes to disk and list what's there now — pulling first so files
  * added from outside the tab show up, then pushing so anything a cell just wrote lands
  * on disk; see the additive-only sync above for why neither step can lose a file.

@@ -126,6 +126,19 @@ would let broken code pass by accident. It patches `_ptero_bridge.segment`, whic
 all three shims because they each call it through the module rather than binding it at
 import.
 
+**The workspace's real files are readable in scratch too, read-only-by-construction.**
+`test_in_scratch` hands the worker the same `FileSystemDirectoryHandle` `kernel.js`
+mounted for the real notebook, and `scratch-worker.js`'s `mountWorkspace` copies file
+bytes into the worker's own in-memory FS rather than mounting the handle. That's not
+incidental caution: the browser's permission grant for a directory is shared by any
+handle referencing it, so a native mount in the worker would inherit the notebook's
+readwrite grant no matter what mode was requested for it. Copying once (additive-only,
+same logic as `kernel.js`'s `pullNewFiles`) means draft code can read the user's actual
+image — catching a real shape/dtype mismatch that a mocked array never would — while a
+delete or overwrite in scratch only ever touches the copy. This existed because file
+access caused enough scratch/real-notebook divergence to be worth the small blast-radius
+tradeoff of letting draft code see real bytes.
+
 The corollary, stated in the system prompt: **never tune a threshold against scratch
 output.** Those object counts are fiction.
 
