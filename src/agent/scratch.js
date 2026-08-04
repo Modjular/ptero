@@ -36,6 +36,7 @@ export function ensureScratch() {
     };
     await send("boot", {
       shimBase: new URL("../shims/", import.meta.url).href,
+      wheelBase: new URL("../../wheels/", import.meta.url).href,
       catalogue: JSON.stringify(catalogue()),
     });
   })();

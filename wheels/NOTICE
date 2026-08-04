@@ -1,0 +1,43 @@
+imagecodecs — pruned WASM build (Pyodide/Emscripten)
+=====================================================
+
+`imagecodecs-2026.6.26-cp312-abi3-pyemscripten_2026_0_wasm32.whl` is a custom build of
+Christoph Gohlke's `imagecodecs` (https://github.com/cgohlke/imagecodecs), cross-compiled
+for Pyodide's wasm32/Emscripten target rather than the upstream project's own manylinux/
+macOS/Windows wheels. It is not published to PyPI — there is no wasm build there — which
+is why it ships in this repo and is installed by URL rather than by name.
+
+Pruned on purpose
+------------------
+Only the compiled extensions needed to decode the compression schemes tifffile actually
+encounters day to day are included, to keep the wheel small for a browser download:
+
+- `_shared` — common codec plumbing
+- `_imcd`   — the core IMCD library: LZW, PackBits, Delta, floating-point predictor,
+              bitorder reversal, and friends (most non-JPEG TIFF compression lives here)
+- `_zlib`   — Deflate/zlib (TIFF compression 8/32946)
+- `_jpeg8`  — baseline JPEG (TIFF compression 7)
+- `_zstd`   — Zstandard (TIFF compression 50000)
+- `_blosc`  — Blosc (used by some Zarr-backed formats, not TIFF)
+
+Codecs outside that list (WebP, JPEG 2000, JPEG XL, LERC, HEIF/AVIF, PNG, ...) are absent.
+`imagecodecs` itself tolerates this by design: each codec's compiled extension is
+imported independently, and calling one whose `.so` isn't present raises
+`DelayedImportError` at call time rather than failing the whole package import — so a
+TIFF using an unlisted compression will still fail, but with a codec-specific error
+instead of taking `tifffile` down for every TIFF.
+
+Provenance / integrity
+-----------------------
+Rebuild by cross-compiling `imagecodecs` 2026.6.26 for Pyodide's wasm32 target with only
+the above extensions enabled; see the upstream project's own build docs for the Pyodide
+toolchain. `LICENSE` here is the upstream BSD-3-Clause licence, copied unmodified from
+the wheel's own `dist-info/licenses/LICENSE`.
+
+Why it's here instead of on the Pyodide CDN
+--------------------------------------------
+`tifffile` (installed on demand by `kernel.js`/`scratch-worker.js`, see `CLAUDE.md`) is
+pure Python and works without `imagecodecs`, but silently can't decode any TIFF that uses
+LZW, Deflate, JPEG, or Zstd compression — which is most real microscopy TIFFs — and
+raises deep inside `tifffile` rather than at the point a cell touches the file. Installing
+this wheel alongside `tifffile` closes that gap.

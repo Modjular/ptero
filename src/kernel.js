@@ -159,6 +159,16 @@ export async function boot({ stdout } = {}) {
 // ---- package loading --------------------------------------------------------------
 const imports = (src, name) => new RegExp(`\\b(?:import|from)\\s+${name}\\b`).test(src);
 
+// A pruned, wasm-cross-compiled build of `imagecodecs` — see wheels/NOTICE. It isn't on
+// PyPI (there's no wasm wheel there), so it's installed by URL rather than by name,
+// alongside tifffile rather than as a separate on-demand step: without it, tifffile
+// opens fine but throws deep inside itself the moment a cell reads a compressed TIFF
+// (LZW/Deflate/JPEG/Zstd — i.e. most real microscopy TIFFs), which looks like an
+// unrelated kernel bug rather than a missing optional dependency.
+const IMAGECODECS_WHEEL =
+  new URL("../wheels/imagecodecs-2026.6.26-cp312-abi3-pyemscripten_2026_0_wasm32.whl",
+           import.meta.url).href;
+
 let tifffileReady = false;
 
 // scikit-image can only read TIFFs through tifffile, which is pure Python and so is
@@ -170,7 +180,9 @@ async function ensureTifffile(src) {
   if (tifffileReady) return;
   if (!imports(src, "skimage") && !imports(src, "tifffile")) return;
   await pyodide.loadPackage("micropip");
-  await pyodide.runPythonAsync("import micropip; await micropip.install('tifffile')");
+  await pyodide.runPythonAsync(
+    `import micropip; await micropip.install([${JSON.stringify(IMAGECODECS_WHEEL)}, 'tifffile'])`
+  );
   tifffileReady = true;
 }
 

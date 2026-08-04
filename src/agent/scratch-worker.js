@@ -29,6 +29,10 @@ let mockInstalled = false;
 let tifffileReady = false;
 let workspaceHandle = null;
 let workspaceReady = false;
+// Set from the boot payload (main thread computes it relative to its own import.meta.url
+// — a classic Worker script has no import.meta.url of its own to resolve it from). See
+// kernel.js for why this wheel exists and what codecs it does/doesn't cover.
+let imagecodecsWheel = null;
 
 const imports = (src, name) => new RegExp(`\\b(?:import|from)\\s+${name}\\b`).test(src);
 
@@ -49,7 +53,8 @@ function stripAutoAwaitFrames(msg) {
   return out.join("\n");
 }
 
-async function boot(shimBase, catalogueJson) {
+async function boot(shimBase, catalogueJson, wheelBase) {
+  imagecodecsWheel = wheelBase + "imagecodecs-2026.6.26-cp312-abi3-pyemscripten_2026_0_wasm32.whl";
   py = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.28.0/full/",
     stdout: (m) => out.push(m),
@@ -122,7 +127,9 @@ async function ensureDeps(src) {
   }
   if (!tifffileReady && (imports(src, "skimage") || imports(src, "tifffile"))) {
     await py.loadPackage("micropip");
-    await py.runPythonAsync("import micropip; await micropip.install('tifffile')");
+    await py.runPythonAsync(
+      `import micropip; await micropip.install([${JSON.stringify(imagecodecsWheel)}, 'tifffile'])`
+    );
     tifffileReady = true;
   }
   if (imports(src, "matplotlib")) {
@@ -216,7 +223,7 @@ self.onmessage = async (e) => {
   const { id, cmd, payload } = e.data;
   try {
     let result;
-    if (cmd === "boot") result = await boot(payload.shimBase, payload.catalogue);
+    if (cmd === "boot") result = await boot(payload.shimBase, payload.catalogue, payload.wheelBase);
     else if (cmd === "test") result = await test(payload);
     else if (cmd === "reset") result = reset();
     else throw new Error(`unknown command ${cmd}`);

@@ -102,6 +102,14 @@ persist across cells, and the reason every kernel-level helper must scope its im
 `loadPackagesFromImports` never fetches it; `kernel.js` micropip-installs it on demand.
 Any new pure-Python dependency needs the same treatment.
 
+**`tifffile` alone can't decode a compressed TIFF.** LZW/Deflate/JPEG/Zstd-compressed
+TIFFs — most real microscopy files — need `imagecodecs`, which has no wasm wheel on
+PyPI. `wheels/` carries a pruned, cross-compiled build (see `wheels/NOTICE` for exactly
+which codecs it covers); `kernel.js` and `scratch-worker.js` micropip-install it by URL
+in the same call as `tifffile`, so a cell never sees `tifffile` succeed at import only
+to throw later on the first compressed file. Both kernels' install calls need to move
+together if this ever changes.
+
 **Nothing may load eagerly at boot.** Packages arrive via `loadPackagesFromImports` per
 cell; weights load per model on first use. Adding an eager `loadPackage` or a top-level
 weights fetch silently undoes the ~5 MB cold start.
