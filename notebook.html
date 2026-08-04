@@ -10,24 +10,25 @@
 <body class="chat-open">
 <div id="main">
 
-<h1>ptero notebook</h1>
-<p class="sub">Real scientific Python — numpy, pandas, scikit-image, matplotlib — running
-entirely in this tab under Pyodide. Segmentation calls are routed to hand-written WGSL
-running on your GPU. Nothing is uploaded anywhere.
-<span class="tag">cellpose · stardist · instanseg</span>
-<span class="tag">weights load on first use</span>
-<span class="tag">your files stay on your disk</span></p>
-
-<div class="row">
-  <button id="runall">▶▶ Run all</button>
-  <button id="choosews" class="btn-subtle">📁 Choose workspace folder</button>
-  <button id="refreshws" class="btn-subtle" title="Re-read the folder">↻</button>
-  <button id="resetcells" class="btn-subtle">↺ Reset to example</button>
-  <button id="chattoggle" class="btn-subtle">💬 Assistant</button>
-  <button id="themetoggle" class="btn-subtle">🌙 Dark</button>
-  <span id="stat" class="tag">booting…</span>
-</div>
-<p class="sub" id="workspace-info"></p>
+<header id="topbar">
+  <div class="topbar-brand">
+    <span class="brand-mark">🔬</span>
+    <span class="brand-name">ptero</span>
+    <span id="stat" class="kernel-status">booting…</span>
+    <div class="topbar-spacer"></div>
+    <button id="chattoggle" class="btn-icon" title="Toggle assistant">💬</button>
+    <button id="themetoggle" class="btn-icon" title="Toggle theme">🌙</button>
+  </div>
+  <div class="topbar-tools" role="toolbar">
+    <button id="runall" title="Run all cells">▶▶ Run all</button>
+    <span class="toolbar-divider"></span>
+    <button id="choosews" class="btn-subtle" title="Choose workspace folder">📁 Choose folder</button>
+    <button id="refreshws" class="btn-subtle" title="Re-read the folder">↻</button>
+    <span class="toolbar-divider"></span>
+    <button id="resetcells" class="btn-subtle" title="Reset to example pipeline">↺ Reset</button>
+  </div>
+  <p class="sub" id="workspace-info"></p>
+</header>
 <div id="downloads"></div>
 
 <div id="cells"></div>

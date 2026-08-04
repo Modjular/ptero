@@ -103,7 +103,18 @@ function buildCell({ source = "", author = "user" } = {}) {
   // left border carries idle/running/done/error, so this never has to say it in words.
   const statusEl = document.createElement("div");
   statusEl.className = "cellstat";
-  wrapEl.append(ctrls, editorHost, outEl, statusEl);
+
+  // The prompt is the cell's position in the document, not an execution count — it's
+  // there so a person can say "cell 3" and mean something stable, which a Jupyter-style
+  // run counter (reused across out-of-order re-runs) would not give them. renumber()
+  // keeps it in sync whenever the list's order or length changes.
+  const promptEl = document.createElement("div");
+  promptEl.className = "cell-prompt";
+
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "cell-body";
+  bodyEl.append(ctrls, editorHost, outEl, statusEl);
+  wrapEl.append(promptEl, bodyEl);
 
   const view = new EditorView({
     doc: source,
@@ -124,12 +135,17 @@ function buildCell({ source = "", author = "user" } = {}) {
     parent: editorHost,
   });
 
-  const cell = { id, author, view, wrapEl, outEl, statusEl, lastResult: null };
+  const cell = { id, author, view, wrapEl, outEl, statusEl, promptEl, lastResult: null };
   runBtn.addEventListener("click", () => runCell(cell));
   delBtn.addEventListener("click", () => removeCell(cell));
   upBtn.addEventListener("click", () => moveCell(cell, -1));
   downBtn.addEventListener("click", () => moveCell(cell, +1));
   return cell;
+}
+
+/** Keep each cell's visible prompt in sync with its position in the document. */
+function renumber() {
+  cells.forEach((c, i) => { c.promptEl.textContent = `In [${i + 1}]`; });
 }
 
 /** Append a cell at the end. Returns the cell. */
@@ -146,6 +162,7 @@ export function insertCell(index, source = "", author = "user") {
   const at = Math.max(0, Math.min(index, cells.length));
   cells.splice(at, 0, cell);
   cellsEl.insertBefore(cell.wrapEl, cellsEl.children[at] ?? null);
+  renumber();
   saveCells();
   onChange();
   return cell;
@@ -165,6 +182,7 @@ export function removeCell(cell, { save = true } = {}) {
   cells.splice(idx, 1);
   cell.view.destroy();
   cell.wrapEl.remove();
+  renumber();
   if (save) { saveCells(); onChange(); }
 }
 
@@ -175,6 +193,7 @@ function moveCell(cell, delta) {
   cells.splice(from, 1);
   cells.splice(to, 0, cell);
   cellsEl.insertBefore(cell.wrapEl, cellsEl.children[to] ?? null);
+  renumber();
   saveCells();
   onChange();
 }

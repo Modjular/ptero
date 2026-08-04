@@ -86,7 +86,8 @@ let isDark = (() => {
 function applyTheme(dark) {
   isDark = dark;
   document.body.classList.toggle("theme-light", !dark);
-  $("themetoggle").textContent = dark ? "🌙 Dark" : "☀️ Light";
+  $("themetoggle").textContent = dark ? "🌙" : "☀️";
+  $("themetoggle").title = dark ? "Switch to light theme" : "Switch to dark theme";
   localStorage.setItem("ptero-theme", dark ? "dark" : "light");
   cells.applyTheme(dark);
 }

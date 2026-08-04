@@ -113,8 +113,54 @@ body.chat-open #main { overflow: auto; min-width: 0; }
 body:not(.chat-open) #chat { display: none; }
 #cells, .cell, .celleditor { min-width: 0; }
 
-h1 { font-size: 20px; margin: 0 0 4px; color: var(--text-main); }
 .sub { color: var(--text-muted); margin: 0 0 18px; }
+
+/* ── Notebook chrome (header) ─────────────────────────────────────── */
+#topbar { margin-bottom: 16px; }
+
+.topbar-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.brand-mark { font-size: 16px; line-height: 1; }
+.brand-name {
+  font-size: 14px; font-weight: 600; letter-spacing: .01em;
+  color: var(--text-main);
+}
+.kernel-status {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 11px ui-monospace, monospace;
+  color: var(--text-muted);
+}
+.kernel-status::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent-primary);
+  flex: 0 0 auto;
+}
+.topbar-spacer { flex: 1; }
+
+.btn-icon {
+  padding: 5px 8px;
+  font-size: 13px;
+  line-height: 1;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+.btn-icon:hover:not(:disabled) { background: var(--accent-subtle); border-color: var(--border-control); }
+
+.topbar-tools {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.topbar-tools button { padding: 6px 12px; font-size: 13px; }
+.toolbar-divider {
+  width: 1px; align-self: stretch;
+  background: var(--border-subtle);
+  margin: 2px 2px;
+}
+#topbar .sub { margin: 10px 0 0; font-size: 12px; }
 
 button {
   font: inherit;
@@ -185,6 +231,8 @@ th { background: var(--bg-control); color: var(--text-main); }
    state lives in the left border, and the buttons appear on hover/focus. */
 .cell {
   position: relative;
+  display: flex;
+  align-items: stretch;
   border: 1px solid var(--border-subtle);
   border-left: 3px solid transparent;
   border-radius: var(--radius-md);
@@ -193,6 +241,18 @@ th { background: var(--bg-control); color: var(--text-main); }
 .cell[data-state="running"] { border-left-color: var(--accent-primary); }
 .cell[data-state="done"]    { border-left-color: var(--accent-success); }
 .cell[data-state="error"]   { border-left-color: var(--accent-danger); }
+
+/* The prompt gutter shows document position, not an execution count — see the
+   comment in cells.js's renumber(). */
+.cell-prompt {
+  flex: 0 0 auto;
+  width: 58px;
+  padding: 9px 4px 0 10px;
+  font: 11px ui-monospace, monospace;
+  color: var(--text-disabled);
+  user-select: none;
+}
+.cell-body { position: relative; flex: 1; min-width: 0; }
 
 /* Cells the agent wrote are marked, so it is always clear who authored what. */
 .cell[data-author="agent"]::after {
