@@ -23,6 +23,7 @@
   --text-dim: #cccccc; /* Secondary content text */
   --text-disabled: #666666; /* Disabled text/elements */
   --text-light: #ffffff;
+  --font-serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
 
   /* Semantic Accents */
   --accent-primary: #287b60;
@@ -33,6 +34,14 @@
   --accent-danger-hover: #a93226;
   --accent-subtle: #3a3a3a;
   --accent-subtle-hover: #444444;
+  /* The one deliberately "agentic" color: marks the assistant pane as its own surface
+     (timing chips, the jump-to-cell glyph) without repainting the whole palette. */
+  --accent-agent: #cc785c;
+  --accent-agent-hover: #b8664c;
+
+  /* Drag-resizable chat pane width. 400px was the fixed max before this became
+     resizable, so it stays the floor — see CHAT_WIDTH_MIN in chat.js. */
+  --chat-width: 400px;
 
   /* Global Radius Tokens */
   --radius-sm: 3px;
@@ -100,9 +109,12 @@ body:has(#chat) #main {
 }
 body.chat-open:has(#chat) {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+  grid-template-columns: minmax(0, 1fr) var(--chat-width);
   height: 100vh;
 }
+/* While dragging the resize handle: a stable cursor and no accidental text/cell
+   selection as the pointer sweeps across the notebook. */
+body.resizing-chat { cursor: col-resize; user-select: none; }
 /* min-width:0 is load-bearing, not tidying. A grid item defaults to min-width:auto,
    which refuses to shrink below its content's min-content width — and CodeMirror's
    long unwrapped lines are very wide. Without this the notebook column overflows its
@@ -321,6 +333,7 @@ code {
 
 /* ── Assistant pane ───────────────────────────────────────────────── */
 #chat {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -328,6 +341,19 @@ code {
   background: var(--bg-surface);
   min-width: 0;
 }
+
+/* A thin hit-target straddling the pane's left edge — invisible until you're about
+   to grab it, same "reveals on interaction" convention as .cellctrls. */
+.chat-resize {
+  position: absolute; top: 0; bottom: 0; left: -4px; width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+}
+.chat-resize::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
+  background: transparent;
+}
+.chat-resize:hover::after, .chat-resize.dragging::after { background: var(--accent-agent); }
 .chathead {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 14px;
@@ -340,7 +366,17 @@ code {
 #chatlog { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 
 .msg { border-radius: var(--radius-md); padding: 9px 12px; max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; }
-.msg.bot { background: var(--bg-surface-elevated); border: 1px solid var(--border-subtle); }
+/* The assistant's own text runs directly in the pane, no bubble — closer to how
+   Claude renders its replies. The user's messages keep the bubble treatment below,
+   which is the contrast that makes the pane read as a distinct surface. */
+.msg.bot {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font-family: var(--font-serif);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
 .msg.me  { background: var(--accent-primary); color: var(--text-light); align-self: flex-end; max-width: 85%; }
 .msg.err { background: color-mix(in srgb, var(--accent-danger) 15%, var(--bg-surface)); border: 1px solid var(--accent-danger); }
 .msg code { font-size: 12px; }
@@ -360,23 +396,36 @@ code {
     width: 100%;
 }
 
-/* Activity chips: enough to see the agent working, never a debug log. */
+/* Activity chips: enough to see the agent working, never a debug log. A quiet marker
+   line rather than a pill — the loud dashed-border badge read as more "debug output"
+   than the subdued, professional trail this is meant to be. */
 .chip {
   align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 7px;
   font: 11px ui-monospace, monospace;
+  letter-spacing: .01em;
   color: var(--text-muted);
-  padding: 2px 9px;
-  border: 1px dashed var(--border-subtle);
-  border-radius: 999px;
+  padding: 1px 0;
 }
-.chip-link { cursor: pointer; border-style: solid; }
-.chip-link:hover { color: var(--text-main); border-color: var(--accent-primary); }
+.chip::before {
+  content: "";
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--text-disabled);
+  flex: 0 0 auto;
+}
+.chip-link { cursor: pointer; }
+.chip-link::before { background: var(--accent-agent); }
+.chip-link:hover { color: var(--text-main); }
+/* Always visible, not just on hover — a hover-only affordance is exactly what made
+   these easy to miss in the first place. */
+.chip-link::after { content: " ↗"; color: var(--accent-agent); }
 
 @keyframes chipPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 @keyframes chipIn { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 /* Settles in over a beat rather than popping in the instant the preceding sentence
    finishes, so the two don't read as one jumbled event. */
 .chip-thinking { animation: chipIn .18s ease-out, chipPulse 1.4s ease-in-out .18s infinite; }
+.chip-thinking::before { background: var(--accent-agent); }
 
 .chatbox {
   display: flex; gap: 8px; align-items: flex-end;

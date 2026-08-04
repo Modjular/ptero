@@ -104,23 +104,47 @@ function chip(text, cell) {
 
 // A placeholder pill for the gap before any real signal exists — right after a turn
 // starts, or between one tool result and the model's next move. Any actual signal
-// (a note, streamed text, a question) supersedes it, so it's cleared the moment one
-// arrives rather than sitting next to real content.
+// (a note, streamed text, a question) supersedes it — but rather than vanishing, it
+// freezes in place as "Thought for Ns", so the transcript keeps a quiet record of
+// how long each step took instead of the indicator just disappearing.
 let thinkingEl = null;
+let thinkingStart = 0;
 function clearThinking() {
-  thinkingEl?.remove();
+  if (!thinkingEl) return;
+  const secs = ((performance.now() - thinkingStart) / 1000).toFixed(1);
+  thinkingEl.textContent = `Thought for ${secs}s`;
+  thinkingEl.classList.remove("chip-thinking");
   thinkingEl = null;
 }
 function showThinking() {
   if (thinkingEl) return;
+  thinkingStart = performance.now();
   thinkingEl = chip("thinking…");
   thinkingEl.classList.add("chip-thinking");
+}
+
+// test_in_scratch reports its start and outcome as two separate notes (tools.js and
+// the recursion-cap test both key off that exact pair), so the duration can't be
+// merged into one chip. Instead, time the gap between the two and append it to the
+// outcome note only — the start note's text and count stay untouched.
+let scratchStart = null;
+function timedNote(text) {
+  if (/^testing in scratch/.test(text)) {
+    scratchStart = performance.now();
+    return text;
+  }
+  if (scratchStart != null && /^scratch test (passed|failed)/.test(text)) {
+    const secs = ((performance.now() - scratchStart) / 1000).toFixed(1);
+    scratchStart = null;
+    return `${text} · ${secs}s`;
+  }
+  return text;
 }
 
 // ---- the UI object the agent drives ---------------------------------------------------
 function makeUI() {
   return {
-    note: (text, cell) => { clearThinking(); chip(text, cell); },
+    note: (text, cell) => { clearThinking(); chip(timedNote(text), cell); },
     error: (text) => { clearThinking(); add("err", text); },
     thinking: () => showThinking(),
     done: () => {
@@ -238,7 +262,6 @@ function submit() {
 
 function autosize() {
   inputEl.style.height = "auto";
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
 }
 
 // ---- settings -------------------------------------------------------------------------
@@ -349,6 +372,47 @@ function updateGate() {
     : "Add an API key";
 }
 
+const CHAT_WIDTH_KEY = "ptero-chat-width";
+const CHAT_WIDTH_MIN = 400;
+function chatWidthMax() { return Math.max(CHAT_WIDTH_MIN, Math.min(800, window.innerWidth * 0.6)); }
+
+function applyChatWidth(px) {
+  const clamped = Math.min(Math.max(px, CHAT_WIDTH_MIN), chatWidthMax());
+  document.documentElement.style.setProperty("--chat-width", `${clamped}px`);
+  return clamped;
+}
+
+function initResize() {
+  const handle = $("chatresize");
+  const saved = parseFloat(localStorage.getItem(CHAT_WIDTH_KEY));
+  if (saved) applyChatWidth(saved);
+
+  let dragging = false, startX = 0, startW = 0;
+  handle.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startW = paneEl.getBoundingClientRect().width;
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("dragging");
+    document.body.classList.add("resizing-chat");
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    // The pane is on the right, so dragging the handle left (negative dx) grows it.
+    applyChatWidth(startW - (e.clientX - startX));
+  });
+  const stopDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("dragging");
+    document.body.classList.remove("resizing-chat");
+    localStorage.setItem(CHAT_WIDTH_KEY,
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chat-width")));
+  };
+  handle.addEventListener("pointerup", stopDrag);
+  handle.addEventListener("pointercancel", stopDrag);
+}
+
 // ---- mount ---------------------------------------------------------------------------
 export function mountChat() {
   paneEl = $("chat");
@@ -384,6 +448,7 @@ export function mountChat() {
   $("chattoggle").addEventListener("click", () => {
     document.body.classList.toggle("chat-open");
   });
+  initResize();
 
   updateGate();
   greet();
