@@ -59,14 +59,8 @@ export function loadSavedCells() {
     return arr.map(e => (typeof e === "string" ? { source: e, author: "user" } : e))
               .filter(e => typeof e?.source === "string");
   } catch {
-    return null;   // corrupt or missing — fall back to the seed script
+    return null;   // corrupt or missing — the notebook starts empty
   }
-}
-
-export function resetCells(sources) {
-  for (const c of [...cells]) removeCell(c, { save: false });
-  for (const s of sources) appendCell(s);
-  saveCells();
 }
 
 // ---- construction -----------------------------------------------------------------
@@ -176,14 +170,15 @@ export function setCellSource(cell, source) {
   saveCells();
 }
 
-export function removeCell(cell, { save = true } = {}) {
+export function removeCell(cell) {
   const idx = cells.indexOf(cell);
   if (idx === -1) return;
   cells.splice(idx, 1);
   cell.view.destroy();
   cell.wrapEl.remove();
   renumber();
-  if (save) { saveCells(); onChange(); }
+  saveCells();
+  onChange();
 }
 
 function moveCell(cell, delta) {

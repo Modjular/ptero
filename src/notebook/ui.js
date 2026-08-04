@@ -4,78 +4,6 @@ import * as cells from "./cells.js";
 
 const $ = (id) => document.getElementById(id);
 
-// ---- seed script --------------------------------------------------------------------
-// The original nuclear/cytoplasm ratio script, split at its own comment boundaries —
-// they were already natural cell breaks. Written exactly as upstream cellpose/stardist
-// docs would have it — no `await` — regardless of whether the browser has JS Promise
-// Integration; the kernel's auto-await rewrite (see shims/_ptero_autoawait.py) makes
-// that invisible.
-const SEED = [
-`import numpy as np
-import pandas as pd
-from skimage import io, measure
-from cellpose import models
-
-img = io.imread("Composite.tif")     # ← or your own file; see the workspace bar above
-cyto_channel = img[..., 1]
-nuc_channel  = img[..., 2]
-img.shape`,
-
-`# cyto3 handles both channels — nuclei are found by shrinking the diameter rather than
-# by loading a second model (image.sc #114981). This kernel also has StarDist and
-# InstanSeg; \`import ptero; ptero.models.list()\` shows what each is good for, and for a
-# fluorescent nuclear stain like this one StarDist is the more specialised choice:
-#     from stardist.models import StarDist2D
-#     nuc_masks, _ = StarDist2D.from_pretrained('2D_versatile_fluo').predict_instances(nuc_channel)
-model = models.CellposeModel(gpu=True, model_type='cyto3')
-cell_masks, _, _ = model.eval(cyto_channel, diameter=100, channels=[0, 0])
-nuc_masks,  _, _ = model.eval(nuc_channel,  diameter=50,  channels=[0, 0])
-f"{cell_masks.max()} cells, {nuc_masks.max()} nuclei"`,
-
-`# --- filter cells without nuclei ---
-cells_with_nuclei = np.unique(cell_masks[nuc_masks > 0])
-filtered_cell_masks = np.where(np.isin(cell_masks, cells_with_nuclei), cell_masks, 0)
-
-# --- cytoplasm = cell minus nucleus ---
-cyto_masks = filtered_cell_masks.copy()
-cyto_masks[nuc_masks > 0] = 0
-f"{len(cells_with_nuclei)} cells kept"`,
-
-`# --- map nucleus id -> cell id ---
-mapping_props = measure.regionprops_table(nuc_masks, intensity_image=filtered_cell_masks,
-                                          properties=['label', 'intensity_max'])
-df_map = pd.DataFrame(mapping_props).rename(columns={'label': 'Nuc_ID', 'intensity_max': 'Cell_ID'})
-
-# --- intensities ---
-nuc_props = measure.regionprops_table(nuc_masks, intensity_image=cyto_channel,
-                                      properties=['label', 'intensity_mean'])
-df_nuc = pd.DataFrame(nuc_props).rename(columns={'label': 'Nuc_ID', 'intensity_mean': 'Nuc_Mean'})
-
-cyto_props = measure.regionprops_table(cyto_masks, intensity_image=cyto_channel,
-                                       properties=['label', 'intensity_mean'])
-df_cyto = pd.DataFrame(cyto_props).rename(columns={'label': 'Cell_ID', 'intensity_mean': 'Cyto_Mean'})
-len(df_map)`,
-
-`df_final = df_map.merge(df_nuc, on='Nuc_ID').merge(df_cyto, on='Cell_ID')
-df_final['Ratio_Nuc_Cyto'] = np.where(df_final['Cyto_Mean'] == 0, 0,
-                                      df_final['Nuc_Mean'] / df_final['Cyto_Mean'])
-
-df_final.to_csv("Cell_Measurements.csv", index=False)
-io.imsave("Filtered_Cell_Labels.tif", filtered_cell_masks.astype(np.uint16))
-df_final`,
-
-`import matplotlib.pyplot as plt
-from skimage.color import label2rgb
-
-fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-axes[0].imshow(label2rgb(filtered_cell_masks, bg_label=0))
-axes[0].set_title(f"{len(cells_with_nuclei)} filtered cells")
-axes[0].axis('off')
-axes[1].hist(df_final['Ratio_Nuc_Cyto'], bins=30)
-axes[1].set_title('Ratio_Nuc_Cyto')
-plt.show()`,
-];
-
 // ---- theme ---------------------------------------------------------------------------
 let isDark = (() => {
   const stored = localStorage.getItem("ptero-theme");
@@ -182,10 +110,6 @@ export async function start() {
     $("runall").disabled = true;
     try { await cells.runAll(); } finally { $("runall").disabled = false; }
   });
-  $("resetcells").addEventListener("click", () => {
-    if (!confirm("Replace all cells with the example pipeline? This discards your edits.")) return;
-    cells.resetCells(SEED);
-  });
   applyTheme(isDark);
 
   if (!navigator.gpu) {
@@ -203,12 +127,10 @@ export async function start() {
     document.body.prepend(banner(`Couldn't start the Python kernel: ${e.message}`));
     throw e;
   }
-  // Restore the previous session's cells, or seed the example pipeline.
+  // Restore the previous session's cells, if any — a fresh notebook starts empty.
   const saved = cells.loadSavedCells();
   if (saved) {
     for (const { source, author } of saved) cells.appendCell(source, author);
-  } else {
-    for (const src of SEED) cells.appendCell(src);
   }
 
   // Loaded dynamically so a session that never opens the assistant doesn't pay for it.
