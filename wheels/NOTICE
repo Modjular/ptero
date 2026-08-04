@@ -1,7 +1,7 @@
 imagecodecs — pruned WASM build (Pyodide/Emscripten)
 =====================================================
 
-`imagecodecs-2026.6.26-cp312-abi3-pyemscripten_2026_0_wasm32.whl` is a custom build of
+`imagecodecs-2026.6.26-cp312-abi3-pyodide_2025_0_wasm32.whl` is a custom build of
 Christoph Gohlke's `imagecodecs` (https://github.com/cgohlke/imagecodecs), cross-compiled
 for Pyodide's wasm32/Emscripten target rather than the upstream project's own manylinux/
 macOS/Windows wheels. It is not published to PyPI — there is no wasm build there — which
@@ -33,6 +33,15 @@ Rebuild by cross-compiling `imagecodecs` 2026.6.26 for Pyodide's wasm32 target w
 the above extensions enabled; see the upstream project's own build docs for the Pyodide
 toolchain. `LICENSE` here is the upstream BSD-3-Clause licence, copied unmodified from
 the wheel's own `dist-info/licenses/LICENSE`.
+
+The platform tag in the filename and in `dist-info/WHEEL` (`pyodide_2025_0_wasm32`) must
+match the `abi_version` micropip reads off the running Pyodide (`pyodide-lock.json` at
+whatever `PYODIDE_VERSION` `kernel.js` pins — currently 0.28.0, whose lock reports
+`abi_version: "2025_0"`). micropip parses that tag into an Emscripten version and rejects
+the wheel outright, before looking at its contents, if it doesn't match — a wheel that
+shipped here once tagged `pyemscripten_2026_0_wasm32` failed this way. Rebuilding for a
+newer Pyodide means re-tagging (and re-testing) against that Pyodide's own lockfile, not
+just bumping the year.
 
 Why it's here instead of on the Pyodide CDN
 --------------------------------------------

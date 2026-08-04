@@ -166,7 +166,7 @@ const imports = (src, name) => new RegExp(`\\b(?:import|from)\\s+${name}\\b`).te
 // (LZW/Deflate/JPEG/Zstd — i.e. most real microscopy TIFFs), which looks like an
 // unrelated kernel bug rather than a missing optional dependency.
 const IMAGECODECS_WHEEL =
-  new URL("../wheels/imagecodecs-2026.6.26-cp312-abi3-pyemscripten_2026_0_wasm32.whl",
+  new URL("../wheels/imagecodecs-2026.6.26-cp312-abi3-pyodide_2025_0_wasm32.whl",
            import.meta.url).href;
 
 let tifffileReady = false;

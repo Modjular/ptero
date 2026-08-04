@@ -363,7 +363,7 @@ code {
 .chathead b { flex: 1; font-size: 13px; }
 .chathead button { padding: 3px 9px; font-size: 12px; border-radius: var(--radius-sm); }
 
-#chatlog { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+#chatlog { flex: 1; overflow-y: auto; padding: 14px 30px; display: flex; flex-direction: column; gap: 10px; }
 
 .msg { border-radius: var(--radius-md); padding: 9px 12px; max-width: 100%; overflow-wrap: anywhere; white-space: pre-wrap; }
 /* The assistant's own text runs directly in the pane, no bubble — closer to how

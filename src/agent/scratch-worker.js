@@ -54,7 +54,7 @@ function stripAutoAwaitFrames(msg) {
 }
 
 async function boot(shimBase, catalogueJson, wheelBase) {
-  imagecodecsWheel = wheelBase + "imagecodecs-2026.6.26-cp312-abi3-pyemscripten_2026_0_wasm32.whl";
+  imagecodecsWheel = wheelBase + "imagecodecs-2026.6.26-cp312-abi3-pyodide_2025_0_wasm32.whl";
   py = await loadPyodide({
     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.28.0/full/",
     stdout: (m) => out.push(m),
