@@ -23,6 +23,15 @@ const SHIM_FILES = [
 const SHIM_DIR = "/lib/ptero_shims";
 const SHIM_ROOTS = ["cellpose", "stardist", "instanseg", "csbdeep", "ptero"];
 
+// See kernel.js for why: one of tifffile's threaded-decode heuristics hardcodes
+// maxworkers=2 for large uncompressed tiled images regardless of TIFF.MAXWORKERS, and
+// Pyodide can't actually start OS threads, so that path dies with `RuntimeError: can't
+// start new thread` on real tiled TIFFs. Pinning the per-page property is what actually
+// forces every read down the serial path; this kernel needs the same fix as the notebook
+// one since a draft that loads the user's real workspace file exercises the same tifffile.
+const TIFFFILE_DISABLE_THREADING =
+  "import tifffile; tifffile.TIFF.MAXWORKERS = 0; tifffile.TiffPage.maxworkers = 0";
+
 let py = null;
 let out = [];
 let mockInstalled = false;
@@ -128,7 +137,8 @@ async function ensureDeps(src) {
   if (!tifffileReady && (imports(src, "skimage") || imports(src, "tifffile"))) {
     await py.loadPackage("micropip");
     await py.runPythonAsync(
-      `import micropip; await micropip.install([${JSON.stringify(imagecodecsWheel)}, 'tifffile'])`
+      `import micropip; await micropip.install([${JSON.stringify(imagecodecsWheel)}, 'tifffile'])\n` +
+      TIFFFILE_DISABLE_THREADING
     );
     tifffileReady = true;
   }
