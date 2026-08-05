@@ -432,10 +432,23 @@ function openaiMessages(system, messages) {
 // enforces for tracebacks: the model may think out loud, the user never sees it. Tags
 // can straddle chunk boundaries, so this is a small streaming state machine rather than
 // a regex run once over the full text.
-function thinkFilter() {
+export function thinkFilter() {
   const OPEN = "<think>", CLOSE = "</think>";
   let mode = "visible", pending = "";
   const findCI = (s, needle) => s.toLowerCase().indexOf(needle);
+  // How many trailing characters of `s` could still grow into `needle` — i.e. the longest
+  // suffix of `s` that is a prefix of `needle`. Usually zero: ordinary prose almost never
+  // ends mid-tag. This must NOT be a fixed `needle.length - 1` window; holding a constant
+  // six characters back withheld the last few characters of *every* message until the
+  // stream ended, and when a turn ends in a tool call the stream doesn't end until the
+  // whole tool-argument JSON has finished streaming — seconds of the user staring at a
+  // sentence missing its last word, which then popped in as the tool started.
+  const partialTail = (s, needle) => {
+    const lower = s.toLowerCase();
+    for (let n = Math.min(s.length, needle.length - 1); n > 0; n--)
+      if (lower.endsWith(needle.slice(0, n))) return n;
+    return 0;
+  };
   function feed(chunk) {
     pending += chunk;
     let out = "";
@@ -443,9 +456,7 @@ function thinkFilter() {
       const needle = mode === "visible" ? OPEN : CLOSE;
       const i = findCI(pending, needle);
       if (i === -1) {
-        // Hold back only a tail that could still be the start of the tag we're
-        // watching for — everything before that is safe to emit (or discard) now.
-        const hold = Math.min(pending.length, needle.length - 1);
+        const hold = partialTail(pending, needle);
         if (mode === "visible") out += pending.slice(0, pending.length - hold);
         pending = pending.slice(pending.length - hold);
         return out;
@@ -455,11 +466,17 @@ function thinkFilter() {
       mode = mode === "visible" ? "thinking" : "visible";
     }
   }
-  // Whatever's still held back when the stream ends was never going to complete a tag:
-  // in visible mode that's just ordinary trailing text, in thinking mode it's an
+  // Release whatever is still held back, at either boundary where no more text can
+  // arrive: the end of the stream, or the start of a tool call. Neither can complete a
+  // tag, so in visible mode it's just ordinary trailing text; in thinking mode it's an
   // unterminated <think> block, which stays hidden rather than leaking half of it.
-  const finish = () => (mode === "visible" ? pending : "");
-  return { feed, finish };
+  // Clearing `pending` keeps this idempotent, so both callers can use it safely.
+  const flush = () => {
+    const out = mode === "visible" ? pending : "";
+    pending = "";
+    return out;
+  };
+  return { feed, flush };
 }
 
 const openai = {
@@ -529,6 +546,12 @@ const openai = {
       for (const tc of delta.tool_calls ?? []) {
         let call = calls.get(tc.index);
         if (!call) {
+          // Prose is over the moment tool-call arguments begin, so release anything the
+          // think-filter is still holding *before* the chip goes up — otherwise the tail
+          // lands after it, which both truncates the sentence for the whole
+          // argument-streaming window and re-fires clearThinking() on arrival.
+          const held = think.flush();
+          if (held) { text += held; onText?.(held); }
           calls.set(tc.index, call = { id: tc.id, name: tc.function?.name, args: "" });
           // As with Anthropic, `function.arguments` streams as its own run of chunks
           // after this one with no visible signal — surface the call starting instead
@@ -538,7 +561,7 @@ const openai = {
         if (tc.function?.arguments) call.args += tc.function.arguments;
       }
     });
-    const tail = think.finish();
+    const tail = think.flush();
     if (tail) { text += tail; onText?.(tail); }
     const content = [];
     if (text) content.push({ type: "text", text });

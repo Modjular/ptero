@@ -245,6 +245,34 @@ async function run(browser, name) {
     const withCalls = sent.flatMap(r => r.messages).find(m => m.role === "assistant" && m.tool_calls);
     check("assistant tool_use blocks become tool_calls with stringified arguments",
           !!withCalls && typeof withCalls.tool_calls[0].function.arguments === "string");
+
+    // The <think>-tag filter is on this path only, and it is the one place text can be
+    // held back mid-sentence. It must hold back *only* a real partial tag: a fixed-width
+    // window meant the last few characters of every reply sat invisible until the stream
+    // ended — which, on a turn ending in a tool call, is after the whole tool-argument
+    // JSON has streamed. Run it in the page, where llm.js's localStorage use is valid.
+    const tf = await page.evaluate(async () => {
+      const { thinkFilter } = await import("/src/agent/llm.js");
+      const emitted = (chunks) => {
+        const f = thinkFilter();
+        return chunks.map(c => f.feed(c)).concat(f.flush());
+      };
+      return {
+        // no holdback: the sentence is complete the instant its last chunk arrives
+        immediate: emitted(["Alright, time to ", "start coding."]).slice(0, -1).join(""),
+        // a tag split across chunks is still caught and hidden
+        split: emitted(["say <thi", "nk>secret</thi", "nk>done"]).join(""),
+        // a genuine partial tag is held, then released by flush()
+        heldThenFlushed: emitted(["ok <thi"]),
+      };
+    });
+    check("think-filter holds back nothing when no tag is in flight",
+          tf.immediate === "Alright, time to start coding.", JSON.stringify(tf.immediate));
+    check("think-filter still hides a <think> block split across chunks",
+          tf.split === "say done", JSON.stringify(tf.split));
+    check("think-filter releases a real partial tag on flush",
+          tf.heldThenFlushed.join("") === "ok <thi" && tf.heldThenFlushed[0] === "ok ",
+          JSON.stringify(tf.heldThenFlushed));
   }
 
   await page.close();
