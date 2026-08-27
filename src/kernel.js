@@ -159,6 +159,26 @@ export async function boot({ stdout } = {}) {
 // ---- package loading --------------------------------------------------------------
 const imports = (src, name) => new RegExp(`\\b(?:import|from)\\s+${name}\\b`).test(src);
 
+// A pruned, wasm-cross-compiled build of `imagecodecs` — see wheels/NOTICE. It isn't on
+// PyPI (there's no wasm wheel there), so it's installed by URL rather than by name,
+// alongside tifffile rather than as a separate on-demand step: without it, tifffile
+// opens fine but throws deep inside itself the moment a cell reads a compressed TIFF
+// (LZW/Deflate/JPEG/Zstd — i.e. most real microscopy TIFFs), which looks like an
+// unrelated kernel bug rather than a missing optional dependency.
+const IMAGECODECS_WHEEL =
+  new URL("../wheels/imagecodecs-2026.6.26-cp312-abi3-pyodide_2025_0_wasm32.whl",
+           import.meta.url).href;
+
+// tifffile decides per-page whether to decode segments on a ThreadPoolExecutor, and one
+// of its heuristics (large uncompressed tiled images) hardcodes maxworkers=2 regardless
+// of the TIFF.MAXWORKERS knob. Pyodide's Python can't actually start OS threads, so that
+// path dies with `RuntimeError: can't start new thread` the first time a cell reads a
+// real tiled TIFF (common for microscopy pyramids) — not something a threshold tweak on
+// TIFF.MAXWORKERS alone can prevent, since that specific branch never reads it. Pinning
+// the per-page property itself is what actually forces every read down the serial path.
+const TIFFFILE_DISABLE_THREADING =
+  "import tifffile; tifffile.TIFF.MAXWORKERS = 0; tifffile.TiffPage.maxworkers = 0";
+
 let tifffileReady = false;
 
 // scikit-image can only read TIFFs through tifffile, which is pure Python and so is
@@ -170,7 +190,10 @@ async function ensureTifffile(src) {
   if (tifffileReady) return;
   if (!imports(src, "skimage") && !imports(src, "tifffile")) return;
   await pyodide.loadPackage("micropip");
-  await pyodide.runPythonAsync("import micropip; await micropip.install('tifffile')");
+  await pyodide.runPythonAsync(
+    `import micropip; await micropip.install([${JSON.stringify(IMAGECODECS_WHEEL)}, 'tifffile'])\n` +
+    TIFFFILE_DISABLE_THREADING
+  );
   tifffileReady = true;
 }
 

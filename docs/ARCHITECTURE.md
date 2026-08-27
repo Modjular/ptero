@@ -207,6 +207,14 @@ Every kernel-level helper scopes its imports *inside* the function.
 kernel — the single most likely first thing to go wrong, TIFF being the microscopy
 format. `kernel.js` micropip-installs it on demand when a cell touches skimage/tifffile.
 
+**`tifffile` still can't read a compressed TIFF without `imagecodecs`.** LZW, Deflate,
+JPEG and Zstd compression — most real microscopy TIFFs — decode through `imagecodecs`,
+which has no wasm wheel on PyPI to fetch. `wheels/` vendors a pruned, cross-compiled
+build (`wheels/NOTICE` lists exactly which codecs were kept); both `kernel.js` and
+`scratch-worker.js` install it from that local wheel URL in the same `micropip.install`
+call as `tifffile`, so the failure mode is "unsupported codec" for the handful of exotic
+compressions left out, not "tifffile imports fine but throws on the first real file."
+
 **esm.sh + shared peer dependencies.** Never pin a shared CodeMirror peer (e.g.
 `@codemirror/state`) to an independently-chosen exact version. `codemirror@6.0.1`
 depends on `^6.0.0`; importing `@6.4.1` separately creates a *second* module instance,
