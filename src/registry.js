@@ -30,6 +30,12 @@ export const MODELS = {
     input: "gray",
     chan2: true,
     mb: 26,
+    // Raw weights.bin is ~25.2 MiB, just over Cloudflare's 25 MiB per-asset limit.
+    // weightsGz points at a gzip-compressed weights.bin.gz instead; getModel()
+    // decompresses it client-side with DecompressionStream before handing the
+    // ArrayBuffer to loadWeights(). Every other model's weights fit under the limit
+    // as plain weights.bin and don't need this.
+    weightsGz: true,
     good_for: "generalist cells and cytoplasm, fluorescence or brightfield; also finds " +
               "nuclei when given the nuclear channel at a smaller diameter",
     key_param: "diameter — the approximate object size in pixels; the single most " +
@@ -94,7 +100,19 @@ export function getModel(id) {
   if (!loading.has(id)) {
     const p = (async () => {
       const device = await sharedDevice();
-      return cfg.engine.load(WEIGHTS_BASE + cfg.dir + "/", { device });
+      const base = WEIGHTS_BASE + cfg.dir + "/";
+      if (!cfg.weightsGz) return cfg.engine.load(base, { device });
+      // Same two fetches the engines' own convenience load() does, just decompressing
+      // weights.bin.gz first — loadWeights() is the same public entry point load()
+      // calls internally, so this instantiates identically to the uncompressed path.
+      const [manifest, bin] = await Promise.all([
+        fetch(base + "manifest.json").then(r => r.json()),
+        fetch(base + "weights.bin.gz")
+          .then(r => new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()),
+      ]);
+      const inst = new cfg.engine(device);
+      inst.loadWeights(manifest, bin);
+      return inst;
     })();
     // Don't cache a rejection: a failed fetch (offline, weights not served) must be
     // retryable rather than poisoning this model for the page's lifetime.
