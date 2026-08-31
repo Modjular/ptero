@@ -11,6 +11,26 @@ import * as kernel from "../kernel.js";
 import { catalogue } from "../registry.js";
 import { testInScratch } from "./scratch.js";
 
+// Base64 image data URLs are long but the model doesn't need to read them as text.
+// The rendered image is what matters, and the model sees it in its native vision
+// processing regardless of how it arrives in the text stream. Three providers, one
+// format: markdown image in text.
+function imgMd(desc, b64) {
+  const meta = (() => { try { return JSON.parse(desc); } catch { return {}; } })();
+  const lines = [meta.kind || "image"];
+  if (meta.shape) lines.push("  shape: " + meta.shape);
+  if (meta.dtype) lines.push("  dtype: " + meta.dtype);
+  if (meta.min != null && meta.max != null) {
+    lines.push("  intensity: " + Number(meta.min).toFixed(1) + " – " + Number(meta.max).toFixed(1) +
+               (meta.mean != null ? " (mean " + Number(meta.mean).toFixed(1) + ")" : ""));
+  }
+  if (meta.pixel_size) lines.push("  pixel size: " + meta.pixel_size);
+  if (meta.scale_bar) lines.push("  scale bar: " + meta.scale_bar);
+  if (meta.display) lines.push("  display: " + meta.display);
+  if (meta.note) lines.push("  note: " + meta.note);
+  return lines.join("\n") + "\n\n![capture](data:image/png;base64," + b64 + ")";
+}
+
 export const SCHEMAS = [
   {
     name: "inspect_user_kernel",
@@ -109,6 +129,43 @@ export const SCHEMAS = [
       type: "object",
       properties: { index: { type: "integer", description: "Cell position, 0-based." } },
       required: ["index"],
+    },
+  },
+  {
+    name: "capture_view",
+    description:
+      "Render an image from the user's kernel as a low-resolution preview so you " +
+      "can see what the data actually looks like. Use this when you need to judge " +
+      "channel content, verify a segmentation result, or assess object density, size, " +
+      "and morphology — things text metadata alone can't convey. The image includes " +
+      "an automatic scale bar (in \u00b5m if pixel-size metadata is available, " +
+      "otherwise in px). The preview is aggressively downsampled to save tokens; " +
+      "use inspect_user_kernel or regionprops for precise measurements.",
+    input_schema: {
+      type: "object",
+      properties: {
+        expression: {
+          type: "string",
+          description:
+            "Python expression in the user's kernel that evaluates to a 2D or 3D " +
+            "(grayscale or RGB) image array, or a matplotlib Figure. Examples: " +
+            "'cyto_channel', 'img[..., 1]', 'label2rgb(masks, bg_label=0)'.",
+        },
+        max_pixels: {
+          type: "integer",
+          description:
+            "Maximum width or height of the preview in pixels. Default 384. " +
+            "Lower values use fewer tokens.",
+          default: 384,
+        },
+        title: {
+          type: "string",
+          description:
+            "Optional short label for the image, e.g. 'DAPI channel' or 'Cellpose " +
+            "overlay'. Included in the text description.",
+        },
+      },
+      required: ["expression"],
     },
   },
   {
@@ -234,6 +291,15 @@ export async function runTool(name, input, ui) {
       return cell.lastResult.ok
         ? `Cell ${input.index} ran successfully.\nOutput:\n${cell.lastResult.text || "(no output)"}`
         : `Cell ${input.index} FAILED.\nCode:\n${src}\n\nError:\n${cell.lastResult.error}`;
+    }
+
+    case "capture_view": {
+      if (!input.expression?.trim()) throw new Error("capture_view needs an expression");
+      ui.note("capturing view");
+      const result = await kernel.captureView(input.expression, input.max_pixels ?? 384);
+      if (result.error) return `capture_view failed: ${result.error}`;
+      const md = imgMd(result.text, result.image);
+      return md;
     }
 
     case "ask_user": {

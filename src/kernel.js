@@ -490,6 +490,157 @@ export async function syncWorkspace() {
   }
 }
 
+/**
+ * Evaluate a Python expression in the user's kernel and render it as a
+ * downsampled PNG with an automatic scale bar. Used by the agent's
+ * capture_view tool so multimodal models can see what the data looks like.
+ *
+ * The expression should evaluate to a 2D/3D image array (numpy) or a
+ * matplotlib Figure. Returns { text: string (JSON metadata), image: string (base64 PNG) }.
+ * The image is downsized to fit within maxPixels on its longest side.
+ */
+export async function captureView(expression, maxPixels = 384) {
+  if (!pyodide) throw new Error("kernel not booted");
+  await ensureMatplotlib();
+
+  // Escape single quotes in the expression for Python safety, then pass it as a
+  // positional arg to avoid any eval-time quoting issues.
+  const code = `
+import json, base64, io, math
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+
+def _ptero_capture_view(expr, max_px):
+    try:
+        arr = eval(expr)
+    except Exception as e:
+        return json.dumps({"error": f"Cannot evaluate: {e}"})
+
+    if hasattr(arr, 'axes'):
+        fig = arr
+        for ax in fig.axes:
+            ax.set_title(ax.get_title() or None)
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', bbox_inches='tight',
+                    dpi=min(max_px / fig.get_size_inches()[0] * 1.2, 200))
+        b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+        info = {"rendered_as": "matplotlib figure"}
+        plt.close(fig)
+        return json.dumps({"image": b64, "text": json.dumps(info)})
+
+    arr = np.asarray(arr)
+    if arr.dtype.kind == 'b':
+        arr = arr.astype(np.uint8) * 255
+
+    shape = arr.shape
+    ndim = arr.ndim
+
+    pixel_size = None
+    pixel_unit = "\u00b5m"  # micron symbol
+    try:
+        meta = getattr(arr, 'meta', None)
+        if meta is not None:
+            ps = meta.get('pixel_size', {}) if isinstance(meta, dict) else {}
+            pixel_size = ps.get('value')
+            pixel_unit = ps.get('unit', '\u00b5m')
+    except Exception:
+        pass
+
+    desc = {"shape": str(list(shape)), "dtype": str(arr.dtype)}
+    if arr.size > 0 and arr.dtype.kind in 'uifb':
+        farr = arr.astype(float)
+        desc["min"] = float(farr.min())
+        desc["max"] = float(farr.max())
+        desc["mean"] = float(np.nanmean(farr))
+
+    if ndim == 2:
+        display = arr
+        desc["kind"] = "grayscale, 2D"
+    elif ndim == 3 and shape[2] in (1, 3, 4):
+        display = arr
+        desc["kind"] = str(shape[2]) + "-channel, last-axis"
+    elif ndim == 3 and shape[0] in (1, 3, 4) and shape[2] not in (1, 3, 4):
+        display = np.transpose(arr, (1, 2, 0))
+        desc["kind"] = str(shape[0]) + "-channel, first-axis"
+    elif ndim == 3:
+        mid = shape[0] // 2
+        display = arr[mid]
+        desc["kind"] = "Z-stack " + str(shape[0]) + " planes, slice " + str(mid)
+    elif ndim == 4:
+        mid = shape[0] // 2
+        display = arr[mid]
+        desc["kind"] = "4D " + str(shape[0]) + " planes, slice " + str(mid)
+    else:
+        return json.dumps({"error": "Cannot render shape " + str(shape)})
+
+    H, W = display.shape[:2]
+    scale = min(max_px / H, max_px / W, 1.0)
+    new_h, new_w = int(H * scale), int(W * scale)
+    desc["display"] = str(new_h) + "x" + str(new_w) + " from " + str(H) + "x" + str(W)
+
+    fig, ax = plt.subplots(figsize=(new_w / 80, new_h / 80))
+    ax.axis('off')
+
+    if display.ndim == 2:
+        ax.imshow(display, cmap='gray', interpolation='bilinear')
+    else:
+        c = display.shape[2]
+        if c == 1:
+            ax.imshow(display[:,:,0], cmap='gray', interpolation='bilinear')
+        elif c in (3, 4):
+            d = display[:,:,:3].astype(float)
+            lo, hi = np.percentile(d, [0.5, 99.5])
+            if hi > lo:
+                d = np.clip((d - lo) / (hi - lo), 0, 1)
+            else:
+                d = np.clip(d, 0, 1)
+            ax.imshow(d, interpolation='bilinear')
+
+    # Scale bar
+    bar_len_px = int(new_w * 0.18)
+    if pixel_size and pixel_size > 0:
+        bar_len_um = bar_len_px * pixel_size
+        magnitude = 10 ** math.floor(math.log10(bar_len_um))
+        bar_len_um = round(bar_len_um / magnitude) * magnitude
+        bar_len_px = bar_len_um / pixel_size
+        if bar_len_um == int(bar_len_um):
+            bar_label = str(int(bar_len_um)) + " " + pixel_unit
+        else:
+            bar_label = f"{bar_len_um:.1f} {pixel_unit}"
+    else:
+        magnitude = 10 ** math.floor(math.log10(bar_len_px))
+        bar_len_px = round(bar_len_px / magnitude) * magnitude
+        bar_label = str(int(bar_len_px)) + " px"
+
+    bar_y = int(new_h * 0.04)
+    bar_x = new_w - bar_len_px - int(new_w * 0.03)
+    ax.plot([bar_x, bar_x + bar_len_px], [bar_y, bar_y],
+            color='white', linewidth=2.5, solid_capstyle='butt')
+    ax.text(bar_x + bar_len_px / 2, bar_y + int(new_h * 0.018), bar_label,
+            color='white', fontsize=9, ha='center', va='bottom',
+            fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.15', facecolor='black', edgecolor='none', alpha=0.45))
+
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=80, pad_inches=0)
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode('ascii')
+
+    if pixel_size and pixel_size > 0:
+        desc["pixel_size"] = str(pixel_size) + " " + pixel_unit + "/px"
+    desc["scale_bar"] = bar_label
+
+    return json.dumps({"image": b64, "text": json.dumps(desc, default=str)})
+
+_ptero_capture_view(${JSON.stringify(expression)}, ${Math.round(maxPixels)})
+`;
+
+  const json = await pyodide.runPythonAsync(code);
+  return JSON.parse(json);
+}
+
 /** Read a file out of the Pyodide FS as bytes, for download links. */
 export function readFile(name) {
   return pyodide.FS.readFile(name);
