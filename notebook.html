@@ -25,9 +25,7 @@
     <button id="choosews" class="btn-subtle" title="Choose workspace folder">📁 Choose folder</button>
     <button id="refreshws" class="btn-subtle" title="Re-read the folder">↻</button>
   </div>
-  <p class="sub" id="workspace-info"></p>
 </header>
-<div id="downloads"></div>
 
 <div id="cells"></div>
 <div class="addcell-row"><button id="addcell" class="btn-subtle">+ add cell</button></div>
@@ -41,6 +39,11 @@
     <button id="chatreset" class="btn-subtle" title="Start a new conversation">↺</button>
     <button id="chatsettings" class="btn-subtle" title="API key and model">⚙</button>
   </div>
+  <details id="workspace-panel">
+    <summary id="workspace-summary">📁 Workspace</summary>
+    <p class="sub" id="workspace-info"></p>
+    <div id="downloads"></div>
+  </details>
   <div id="chatlog"></div>
   <div class="chatbox">
     <textarea id="chatinput" rows="1" placeholder="Describe what you want to measure…"></textarea>
