@@ -110,12 +110,17 @@ enforced in code rather than hoped for:
   plain language.
 - **Context protection.** Failed drafts and tracebacks stay in the model's working
   context, where they're needed, but never reach the chat transcript. The user sees
-  "testing…", then either working code or a plain explanation.
+  "testing…", then either working code or a plain explanation. The one deliberate
+  exception is `capture_view`: its preview is an image the agent already looked at, not
+  debugging noise, so it is rendered to the user as a thumbnail (click to enlarge).
 
-Tools: `inspect_user_kernel`, `test_in_scratch`, `push_to_ui`, `read_cell_result`,
-`ask_user`. The first and fourth are additions to harness_v1's three — without
-`inspect_user_kernel` the mock shapes are guesses, and without `read_cell_result` the
-agent is blind to the likeliest next event, the user pressing ▶ and getting an error.
+Tools: `inspect_user_kernel`, `inspect_file`, `test_in_scratch`, `push_to_ui`,
+`read_cell_result`, `capture_view`, `ask_user`. The first, second and fifth are
+additions to harness_v1's three — without `inspect_user_kernel` the mock shapes are
+guesses, without `inspect_file` the agent loads a whole file just to learn its shape,
+and without `read_cell_result` the agent is blind to the likeliest next event, the user
+pressing ▶ and getting an error. `capture_view` both feeds the model's vision and shows
+the user what it saw.
 
 **The scratch kernel is a Worker with mocked segmentation.** It catches shape
 mismatches, wrong tuple arity, bad merges — bugs in the analysis code, which is what the

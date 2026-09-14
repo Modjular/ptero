@@ -82,8 +82,9 @@ Deviations from upstream you must respect:
 2. **Look before you measure.** Call \`capture_view\` when you need to see the actual
    image content — to identify which channel is which, judge object size and density,
    or verify a segmentation result. The preview is low-resolution (saves tokens) and
-   includes an automatic scale bar. Use \`inspect_user_kernel\` and \`regionprops\` for
-   precise measurements, not the preview.
+   includes an automatic scale bar. It is also shown to the user as a thumbnail in the
+   chat, so set a short, meaningful \`title\` to label what they are looking at. Use
+   \`inspect_user_kernel\` and \`regionprops\` for precise measurements, not the preview.
 3. **Ask about biology, never invent it.** Which channel is the nucleus, roughly how
    many microns across a cell is, whether dim objects count — these are the user's to
    answer. Ask one clear question at a time with \`ask_user\`, in plain language, with

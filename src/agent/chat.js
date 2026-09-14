@@ -102,6 +102,63 @@ function chip(text, cell) {
   return el;
 }
 
+// A capture_view preview, shown to the user as a thumbnail. This is the one tool
+// result that deliberately reaches the transcript: it is an image the agent already
+// looked at, not debugging noise, so it does not violate the context-protection rule.
+// Clicking opens the full-size preview in a lightbox.
+function renderCapture({ image, meta = {}, title }) {
+  const wrap = document.createElement("div");
+  wrap.className = "capture";
+
+  const img = document.createElement("img");
+  img.className = "capture-thumb";
+  img.loading = "lazy";
+  img.src = `data:image/png;base64,${image}`;
+  img.alt = title || meta.kind || "capture preview";
+  img.title = "Click to enlarge";
+  img.addEventListener("click", () => openLightbox(img.src, title || meta.kind || "capture"));
+  wrap.appendChild(img);
+
+  const bits = [
+    title,
+    meta.kind,
+    meta.shape && `shape ${meta.shape}`,
+    meta.dtype,
+    meta.min != null && meta.max != null &&
+      `${Number(meta.min).toFixed(1)}–${Number(meta.max).toFixed(1)}`,
+    meta.scale_bar && `scale bar ${meta.scale_bar}`,
+  ].filter(Boolean);
+  if (bits.length) {
+    const cap = document.createElement("div");
+    cap.className = "capture-cap";
+    cap.textContent = bits.join(" · ");
+    wrap.appendChild(cap);
+  }
+
+  logEl.appendChild(wrap);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// One reusable dialog rather than one per capture — a transcript can accumulate many
+// thumbnails, and each only ever needs the single full-size view.
+let lightboxEl = null;
+function openLightbox(src, caption) {
+  if (!lightboxEl) {
+    lightboxEl = document.createElement("dialog");
+    lightboxEl.className = "chat-lightbox";
+    const big = document.createElement("img");
+    big.className = "chat-lightbox-img";
+    const noteEl = document.createElement("div");
+    noteEl.className = "chat-lightbox-cap";
+    lightboxEl.append(big, noteEl);
+    lightboxEl.addEventListener("click", () => lightboxEl.close());
+    document.body.appendChild(lightboxEl);
+  }
+  lightboxEl.querySelector(".chat-lightbox-img").src = src;
+  lightboxEl.querySelector(".chat-lightbox-cap").textContent = caption;
+  lightboxEl.showModal();
+}
+
 // A placeholder pill for the gap before any real signal exists — right after a turn
 // starts, or between one tool result and the model's next move. Any actual signal
 // (a note, streamed text, a question) supersedes it — but rather than vanishing, it
@@ -145,6 +202,7 @@ function timedNote(text) {
 function makeUI() {
   return {
     note: (text, cell) => { clearThinking(); chip(timedNote(text), cell); },
+    capture: ({ image, meta, title }) => { clearThinking(); renderCapture({ image, meta, title }); },
     error: (text) => { clearThinking(); add("err", text); },
     thinking: () => showThinking(),
     done: () => {

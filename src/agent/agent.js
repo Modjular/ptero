@@ -20,7 +20,7 @@ const MAX_STEPS = 24;
 
 export class Agent {
   constructor(ui) {
-    this.ui = ui;              // { note, ask, stream, thinking, done, error }
+    this.ui = ui;              // { note, ask, stream, thinking, done, error, capture }
     this.messages = [];        // full history, including tool results
     this.busy = false;
     this.controller = null;

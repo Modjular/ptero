@@ -104,6 +104,9 @@ const WORKING = (enc) => [
     "f'{len(df)} objects'",
   ].join("\n"), vars: [{ name: "img", shape: [256, 256] }] } }]),
   enc([{ id: "t5", name: "push_to_ui", input: { code: "# count nuclei\nlabels.max()" } }]),
+  // capture_view is the one tool result that must reach the transcript (as a thumbnail);
+  // the expression is evaluated in the real kernel, so this tests the whole path.
+  enc([{ id: "t6", name: "capture_view", input: { expression: "__import__('numpy').arange(4096).reshape(64, 64)", title: "Test preview" } }]),
   enc([{ text: "Added a cell that counts nuclei. Press ▶ to run it." }], finishFor(enc)),
 ];
 
@@ -188,6 +191,15 @@ async function run(browser, name) {
   check("scratch retry passed", log.some(l => l.startsWith("chip") && /passed/.test(l)));
   check("push_to_ui added an agent cell",
         cells.length === cellsBefore + 1 && cells.filter(a => a === "agent").length === 1);
+  // The capture preview is the deliberate exception to "no tool results in the
+  // transcript": the user should see the same image the agent looked at.
+  const capture = await page.evaluate(() => {
+    const img = document.querySelector(".capture-thumb");
+    return img && { src: img.src.slice(0, 22), alt: img.alt, cap: !!document.querySelector(".capture-cap") };
+  });
+  check("capture_view renders a thumbnail in the transcript",
+        !!capture && capture.src === "data:image/png;base64,", capture ? capture.src : "none");
+  check("capture thumbnail is labelled", !!capture && capture.alt === "Test preview");
   // The one that matters most: debugging noise must never reach the user.
   check("context protection: no traceback in the transcript",
         !log.some(l => /Traceback|IndexError|File "|line \d+, in/.test(l)));

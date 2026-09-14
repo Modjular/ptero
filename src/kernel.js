@@ -501,7 +501,6 @@ export async function syncWorkspace() {
  */
 export async function captureView(expression, maxPixels = 384) {
   if (!pyodide) throw new Error("kernel not booted");
-  await ensureMatplotlib();
 
   // Escape single quotes in the expression for Python safety, then pass it as a
   // positional arg to avoid any eval-time quoting issues.
@@ -636,6 +635,12 @@ def _ptero_capture_view(expr, max_px):
 
 _ptero_capture_view(${JSON.stringify(expression)}, ${Math.round(maxPixels)})
 `;
+
+  // capture_view evaluates a live user expression, so it needs the same per-run
+  // package resolution a cell gets — otherwise it fails on any kernel that hasn't
+  // imported numpy/matplotlib yet. Still on-demand: nothing loads until a capture.
+  await ensurePackages(code);
+  await ensureMatplotlib();
 
   const json = await pyodide.runPythonAsync(code);
   return JSON.parse(json);

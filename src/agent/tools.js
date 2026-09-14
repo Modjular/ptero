@@ -15,9 +15,10 @@ import { testInScratch } from "./scratch.js";
 // The rendered image is what matters, and the model sees it in its native vision
 // processing regardless of how it arrives in the text stream. Three providers, one
 // format: markdown image in text.
-function imgMd(desc, b64) {
+function imgMd(desc, b64, title) {
   const meta = (() => { try { return JSON.parse(desc); } catch { return {}; } })();
   const lines = [meta.kind || "image"];
+  if (title) lines.push("  title: " + title);
   if (meta.shape) lines.push("  shape: " + meta.shape);
   if (meta.dtype) lines.push("  dtype: " + meta.dtype);
   if (meta.min != null && meta.max != null) {
@@ -298,8 +299,12 @@ export async function runTool(name, input, ui) {
       ui.note("capturing view");
       const result = await kernel.captureView(input.expression, input.max_pixels ?? 384);
       if (result.error) return `capture_view failed: ${result.error}`;
-      const md = imgMd(result.text, result.image);
-      return md;
+      // Show the same preview to the user as a thumbnail in the transcript. The
+      // image is already downsampled by captureView, so this costs no extra work.
+      let meta = {};
+      try { meta = JSON.parse(result.text); } catch {}
+      ui.capture({ image: result.image, meta, title: input.title });
+      return imgMd(result.text, result.image, input.title);
     }
 
     case "ask_user": {

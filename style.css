@@ -441,6 +441,28 @@ code {
 .chip-thinking { animation: chipIn .18s ease-out, chipPulse 1.4s ease-in-out .18s infinite; }
 .chip-thinking::before { background: var(--accent-agent); }
 
+/* capture_view previews in the transcript. The image is already downsampled by the
+   kernel, so this only caps its on-screen size; the click target opens the same data
+   URL full-size in the lightbox below. */
+.capture { align-self: flex-start; max-width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.capture-thumb {
+  display: block; max-height: 150px; max-width: 100%;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+  cursor: zoom-in;
+}
+.capture-cap { font: 11px ui-monospace, monospace; color: var(--text-muted); }
+
+.chat-lightbox {
+  padding: 0; border: none; background: none; max-width: 90vw; max-height: 90vh;
+  cursor: zoom-out;
+}
+.chat-lightbox::backdrop { background: rgba(0, 0, 0, .75); }
+.chat-lightbox-img { display: block; max-width: 90vw; max-height: 82vh; border-radius: var(--radius-sm); }
+.chat-lightbox-cap {
+  margin-top: 8px; text-align: center;
+  font: 12px ui-monospace, monospace; color: var(--text-light);
+}
+
 .chatbox {
   display: flex; gap: 8px; align-items: flex-end;
   padding: 12px; border-top: 1px solid var(--border-subtle);
