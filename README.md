@@ -1,11 +1,6 @@
 # ptero
 
-Bio-image segmentation and analysis that runs entirely in a browser tab. Three
-microscopy segmentation models ported to WebGPU (no PyTorch, no TensorFlow,
-no CUDA, no ML framework at inference) plus a Python notebook running the real
-scientific stack under Pyodide, plus an agent that writes the analysis code for you.
-
-Your images never leave your machine.
+Run Cellpose, Stardist, and Instanseg in the browser inside a real Python notebook. There are many better, more powerful, more performant solutions in the cloud, but ptero is completely local.
 
 ## Run it
 
@@ -34,8 +29,7 @@ and the filesystem mount both need a real origin.
 | `stardist-he` | H&E histology nuclei | 5.7 MB |
 | `instanseg-brightfield` | brightfield / unstained nuclei | 15 MB |
 
-Weights load lazily, per model, on first use — a session downloads only what it uses.
-Cold start is about 5 MB.
+Weights load lazily, per model, on first use. Cold start is about 5 MB.
 
 ## Writing Python
 
@@ -52,8 +46,7 @@ from instanseg import InstanSeg
 labels, _ = InstanSeg('brightfield_nuclei').eval_small_image(rgb)
 ```
 
-There are a handful of deliberate deviations (no torch tensors, no SizeModel, no
-polygon output) — each is documented in the module's docstring, and
+It's not a perfect 1:1 port. The minor deviations are documented in the module's docstring, and
 `docs/ARCHITECTURE.md` lists them all. To see what's installed at runtime:
 
 ```python
@@ -61,17 +54,11 @@ import ptero
 ptero.models.list()
 ```
 
-## The assistant
+## Optional AI Assistance
 
-The pane on the right turns "count the nuclei in the DAPI channel" into notebook cells.
-It picks the segmentation model, asks you about anything biological it can't determine,
-tests its code in a hidden kernel first, and puts working cells in your notebook for you
-to run. It never runs them for you.
+Bring your own provider. Compatible with Anthropic and any OpenAI compliant spec (so third party or Ollama endpoints work too). 
 
-Open ⚙ to choose a provider — **Anthropic** or **Google Gemini** — and paste a key.
-Keys are stored in this browser only and sent straight from the page to the provider;
-each provider's key and model choice are remembered separately, and "List models" asks
-the provider what your key can actually reach rather than offering a stale list.
+Open ⚙ to choose a provider. **Keys are stored in this browser only and sent straight from the page to the provider**. You can even open the devtools to confirm this. Each provider's key and model choice are only stored via `localStorage`, and "List models" directly asks the provider what your key can access.
 
 ## Development
 
