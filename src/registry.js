@@ -81,8 +81,6 @@ export const MODELS = {
 const WEIGHTS_BASE = new URL("../weights/", import.meta.url).href;
 const loading = new Map();   // id -> Promise<engine instance>, in-flight or settled
 
-export function isKnownModel(id) { return Object.hasOwn(MODELS, id); }
-
 export function modelIds() { return Object.keys(MODELS); }
 
 // True once a model's weights are resident — lets callers report "already loaded" vs

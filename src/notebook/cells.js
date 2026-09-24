@@ -28,9 +28,6 @@ let onChange = () => {};       // fired whenever the cell list or a source chang
 
 export const cells = [];
 
-export function findCell(id) { return cells.find(c => c.id === id); }
-export function indexOf(cell) { return cells.indexOf(cell); }
-
 // ---- persistence ------------------------------------------------------------------
 // Source only, never output: figures and tables are cheap to regenerate by re-running
 // and would blow through localStorage's ~5-10 MB quota fast.

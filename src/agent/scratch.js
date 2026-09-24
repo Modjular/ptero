@@ -52,6 +52,10 @@ export async function testInScratch({ code, vars }) {
   return send("test", { code, vars, workspaceHandle: getWorkspaceHandle() });
 }
 
+// NOTE: not called anywhere today. It clears the scratch worker's globals for a fresh
+// start (scratch-worker.js's `reset`), which the worker's own comment says should be
+// possible "when the agent changes approach" — but no caller was ever wired up. Kept
+// as-is rather than deleted: this looks like an unfinished hook, not dead code.
 export async function resetScratch() {
   if (!booting) return;
   await ensureScratch();

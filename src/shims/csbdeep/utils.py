@@ -21,4 +21,7 @@ def normalize(x, pmin=1, pmax=99.8, axis=None, eps=1e-20, dtype=np.float32, **kw
     x = np.asarray(x, dtype=dtype)
     lo = np.percentile(x, pmin, axis=axis, keepdims=True)
     hi = np.percentile(x, pmax, axis=axis, keepdims=True)
-    return (x - lo) / np.maximum(hi - lo, eps)
+    # np.percentile returns float64, so the division above promotes x and the result
+    # silently stops honouring the dtype argument. Cast back so a caller that asked
+    # for float32 (the default, and what the engines expect) actually gets it.
+    return ((x - lo) / np.maximum(hi - lo, eps)).astype(dtype, copy=False)
