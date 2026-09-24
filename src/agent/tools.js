@@ -43,7 +43,7 @@ export const SCHEMAS = [
     description:
       "Run code in a hidden scratch kernel to check it works, before the user ever " +
       "sees it. The workspace's real files are readable here by their real names — " +
-      "prefer `io.imread(\"Composite.tif\")` etc. over a mock var whenever the file " +
+      "prefer `io.imread(\"test_image.tif\")` etc. over a mock var whenever the file " +
       "already exists, it catches real shape/dtype mistakes that a synthetic array " +
       "can't. The one thing still fake is segmentation: it returns synthetic label maps " +
       "of the right shape and dtype, so this verifies your analysis code, not the " +

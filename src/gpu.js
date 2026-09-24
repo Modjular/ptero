@@ -2,8 +2,8 @@
 //
 // Each of the three cores used to call navigator.gpu.requestAdapter() from its own
 // static create(), which was fine when a page only ever instantiated one of them (the
-// demo pages) but means three adapters and three devices as soon as a single page can
-// reach for cellpose, stardist and instanseg — as the notebook now can. Devices are not
+// upstream demo pages) but means three adapters and three devices as soon as a single
+// page can reach for cellpose, stardist and instanseg — as the notebook now can. Devices are not
 // free: each carries its own allocator and its own set of compiled pipelines, and
 // buffers are not transferable between them.
 //

@@ -17,9 +17,10 @@ import { sharedDevice, adapterDescription } from "./gpu.js";
 // `input` is what the engine's segmentImage() wants:
 //   "gray" — one [H,W] Float32Array   ("chan2: true" = accepts an optional second one)
 //   "rgb"  — three planes, [3,H,W]
-// `params` are the engine's own defaults, lifted from the demo pages and engine source
-// rather than invented, so a call with no options behaves exactly like the demo does:
-//   stardist thresholds  — demo/stardist.html MODELS
+// `params` are the engine's own defaults, lifted from the upstream webgpu-cellseg demo
+// pages and engine source rather than invented, so a call with no options behaves
+// exactly like the demo does:
+//   stardist thresholds  — stardist demo MODELS
 //   instanseg thresholds — src/instanseg.js DEFAULTS
 //   cellpose thresholds  — src/cellpose.js computeMasksGPU
 export const MODELS = {
@@ -130,10 +131,10 @@ function toPlanes(image) {
   throw new Error("image must be a Float32Array or an array of Float32Array planes");
 }
 
-// [3,H,W] planar, replicating a single plane across R/G/B — the same rule the demo
-// pages use for feeding a grayscale source to an RGB model (demo/instanseg.html
-// selectRGB). Extra planes past the third are dropped; two planes get the second
-// duplicated into B, which beats erroring on a 2-channel fluorescence stack.
+// [3,H,W] planar, replicating a single plane across R/G/B — the same rule the upstream
+// demo pages use for feeding a grayscale source to an RGB model (instanseg selectRGB).
+// Extra planes past the third are dropped; two planes get the second duplicated into B,
+// which beats erroring on a 2-channel fluorescence stack.
 function asRGB(planes, H, W) {
   const n = H * W, rgb = new Float32Array(3 * n);
   for (let c = 0; c < 3; c++) rgb.set(planes[Math.min(c, planes.length - 1)], c * n);

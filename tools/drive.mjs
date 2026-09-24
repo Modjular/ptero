@@ -4,14 +4,14 @@
 // Pyodide filesystem (headless can't use the folder picker), runs every cell, and
 // reports each cell's status and output. Exits nonzero if any cell errors.
 //
-//   node tools/drive.mjs                       # run the seeded cells as-is
-//   node tools/drive.mjs --stage demo/images/Composite.tif
+//   node tools/drive.mjs                       # stages tools/test_image.tif, runs the seed
+//   node tools/drive.mjs --stage /path/to/other.tif
 //   node tools/drive.mjs --url http://localhost:8765/notebook.html --keep
 //
-// Requires a static server on the repo root and puppeteer-core:
+// Requires a static server on the repo root and puppeteer-core (installed under
+// tools/, since that is where this repo keeps its npm dev tools):
 //   python3 -m http.server 8765 &
-//   npm install
-import { spawn } from "node:child_process";
+//   npm --prefix tools install
 import puppeteer from "puppeteer-core";
 
 const args = process.argv.slice(2);
@@ -25,6 +25,7 @@ const BASE = flag("--base", "http://localhost:8765");
 const URL_ = flag("--url", `${BASE}/notebook.html`);
 const TIMEOUT = Number(flag("--timeout", 300)) * 1000;
 const STAGE = args.filter((a, i) => args[i - 1] === "--stage");
+const STAGE_FILES = STAGE.length ? STAGE : ["tools/test_image.tif"];
 
 const CHROME = flag("--chrome", process.env.CHROME_PATH ||
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
@@ -32,7 +33,7 @@ const CHROME = flag("--chrome", process.env.CHROME_PATH ||
 // The nuclear/cytoplasm ratio pipeline used to ship as the notebook's own seeded
 // example; the app now starts every fresh notebook empty, so this driver carries its
 // own copy as a fixture — injected below only when the page has no cells already —
-// to keep the documented Composite.tif baseline (190 cells, 183 nuclei, 173 kept)
+// to keep the documented test_image.tif baseline (190 cells, 183 nuclei, 173 kept)
 // reproducible without a manual click. Written exactly as upstream cellpose/stardist
 // docs would have it — no `await` — the kernel's auto-await rewrite makes that
 // invisible regardless of whether the browser has JS Promise Integration.
@@ -42,7 +43,7 @@ import pandas as pd
 from skimage import io, measure
 from cellpose import models
 
-img = io.imread("Composite.tif")     # ← or your own file; see the workspace bar above
+img = io.imread("test_image.tif")     # ← or your own file; see the workspace bar above
 cyto_channel = img[..., 1]
 nuc_channel  = img[..., 2]
 img.shape`,
@@ -148,7 +149,7 @@ try {
 
   // Stage input files into the Pyodide FS — the folder picker needs a real user
   // gesture, so a headless run has no other way to supply an image.
-  for (const rel of STAGE) {
+  for (const rel of STAGE_FILES) {
     const name = rel.split("/").pop();
     await page.evaluate(async (url, name) => {
       const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
