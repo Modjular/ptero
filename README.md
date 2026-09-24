@@ -1,17 +1,15 @@
 # ptero
 
-Bio-image segmentation and analysis that runs entirely in a browser tab. Three
-microscopy segmentation models ported to WebGPU (no PyTorch, no TensorFlow,
-no CUDA, no ML framework at inference) plus a Python notebook running the real
-scientific stack under Pyodide, plus an agent that writes the analysis code for you.
+ - **What**: Python + cell segmentation + optional agent harness, all in the browser.
+  - **How**: Pyodide + WebGPU + LLM (BYOK).
+ - **Why**: Meant for those doing small-scale bio-image segmentation and analysis.
 
-Your images never leave your machine.
 
 ## Run it
 
 ```bash
 python3 -m http.server 8765
-open http://localhost:8765/
+open http://localhost:8765/notebook.html
 ```
 
 > [!IMPORTANT]
@@ -23,7 +21,8 @@ and the filesystem mount both need a real origin.
 | | |
 |---|---|
 | **`notebook.html`** | numpy · pandas · scikit-image · matplotlib in the tab, with all four model checkpoints callable from Python under their real library names. Point it at a folder on your disk. |
-| **`demo/*.html`** | One standalone interactive demo per model, with threshold sliders. |
+| **`src/`** | The notebook, kernel/shims, model registry and agent. Served as-is — no build step. |
+| **`tools/`** | Headless browser test drivers and their npm dev dependencies. |
 
 ### Models
 
@@ -53,8 +52,8 @@ labels, _ = InstanSeg('brightfield_nuclei').eval_small_image(rgb)
 ```
 
 There are a handful of deliberate deviations (no torch tensors, no SizeModel, no
-polygon output) — each is documented in the module's docstring, and
-`docs/ARCHITECTURE.md` lists them all. To see what's installed at runtime:
+polygon output) — each is documented in the module's docstring. To see what's installed
+at runtime:
 
 ```python
 import ptero
@@ -68,20 +67,24 @@ It picks the segmentation model, asks you about anything biological it can't det
 tests its code in a hidden kernel first, and puts working cells in your notebook for you
 to run. It never runs them for you.
 
-Open ⚙ to choose a provider — **Anthropic** or **Google Gemini** — and paste a key.
-Keys are stored in this browser only and sent straight from the page to the provider;
-each provider's key and model choice are remembered separately, and "List models" asks
-the provider what your key can actually reach rather than offering a stale list.
+Open ⚙ to choose a provider — **Anthropic**, **Google Gemini**, or any
+OpenAI-compatible endpoint — and paste a key. Keys are stored in this browser only and
+sent straight from the page to the provider; each provider's key and model choice are
+remembered separately, and "List models" asks the provider what your key can actually
+reach rather than offering a stale list.
 
 ## Development
 
 ```bash
-npm install
-node tools/drive.mjs --stage demo/images/Composite.tif   # headless regression run
+npm --prefix tools install
+cd tools && npm run serve            # static server on the repo root, :8765
+node tools/drive.mjs                 # headless regression run (uses tools/test_image.tif)
+node tools/test_agent.mjs            # agent harness, both providers
+python3 tools/test_shims.py          # shim logic; also --sync
 ```
 
 Architecture, design decisions and the gotchas worth not rediscovering:
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+[`AGENTS.md`](AGENTS.md).
 
 ## Licence
 

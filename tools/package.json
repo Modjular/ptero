@@ -5,8 +5,10 @@
   "description": "Bio-image segmentation and analysis in the browser: three models on WebGPU, real scientific Python under Pyodide.",
   "type": "module",
   "scripts": {
-    "serve": "python3 -m http.server 8765",
-    "drive": "node tools/drive.mjs --stage demo/images/Composite.tif"
+    "serve": "python3 -m http.server 8765 --directory ..",
+    "drive": "node drive.mjs",
+    "test:agent": "node test_agent.mjs",
+    "test:shims": "python3 test_shims.py && python3 test_shims.py --sync"
   },
   "devDependencies": {
     "puppeteer-core": "^23.0.0"
