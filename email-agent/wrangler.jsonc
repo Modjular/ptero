@@ -1,0 +1,16 @@
+{
+	"name": "ptero-email-agent",
+	"main": "src/worker.ts",
+	// The newest date the bundled workerd supports; bump with wrangler.
+	"compatibility_date": "2026-08-15",
+	"compatibility_flags": ["nodejs_compat"],
+	"durable_objects": {
+		"bindings": [{ "name": "MAIL_AGENT", "class_name": "MailAgent" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MailAgent"] }],
+	"vars": {
+		"PUBLIC_URL": "https://ptero.example",
+		"FROM_ADDRESS": "ptero <help@ptero.example>"
+	}
+	// Secrets (wrangler secret put): ANTHROPIC_API_KEY, RESEND_API_KEY, RUNNER_TOKEN
+}
