@@ -6,7 +6,8 @@
     "dev": "wrangler dev",
     "test": "vitest run",
     "typecheck": "tsc -p .",
-    "bench": "node --experimental-strip-types --no-warnings bench/cpu.ts"
+    "bench": "node --experimental-strip-types --no-warnings bench/cpu.ts",
+    "e2e": "node scripts/runner-e2e.mjs"
   },
   "dependencies": {
     "@earendil-works/chord": "^1.0.0",

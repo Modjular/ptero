@@ -2,6 +2,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Type } from "@earendil-works/pi-ai";
 import { createModels, type Models } from "@earendil-works/pi-ai/models";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { type FauxResponseStep, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import {
 	AssistantEntry,
 	createRegistry,
@@ -13,6 +14,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { DurableObject } from "cloudflare:workers";
 import { openDurableObjectStorage } from "./do-sqlite.ts";
+import { type JobReport, jobBoard } from "./jobs.ts";
 
 const context = BACKGROUND_CONTEXT;
 const WATCHDOG_MS = 60_000;
@@ -25,7 +27,7 @@ export type InboundMail = { from: string; messageId: string; subject: string; te
 // A submission whose answer still owes the customer an email.
 type Pending = { submissionId: string; requestId: string; inReplyTo: string | null };
 type SentMail = { key: string; to: string; subject: string; inReplyTo: string | null; text: string };
-type Job = { id: string; files: string[]; plan: string; status: "queued" | "done" };
+type Job = { id: string; files: string[]; plan: string; status: "queued" | "done" | "failed"; artifacts: string[] };
 
 /** Everything the mail side needs that is not the transcript. Committed like any other durable state. */
 const MailState = defineDoc<{
@@ -64,7 +66,16 @@ what happened in your reply to them.
 
 Data never travels by email: give the customer an upload link with the upload_link tool. Analyses run
 asynchronously: queue one with run_analysis, tell the customer you will email when it finishes, and end
-your turn. A [runner] message arrives when it does.`;
+your turn. A [runner] message arrives when it does.
+
+run_analysis runs notebook cells in ptero: Python under Pyodide in a browser with WebGPU. numpy, pandas,
+scikit-image, scipy and matplotlib are available, and so are cellpose, stardist and instanseg under their
+upstream APIs (CellposeModel(model_type='cyto3').eval(img, diameter=...) returns masks, flows, styles;
+StarDist2D.from_pretrained('2D_versatile_fluo').predict_instances(img); always pass a cellpose diameter).
+Uploaded files sit in the working directory under their own names. Figures left open by a cell and files a
+cell writes (csv, tif, png) come back as artifacts. Cells share one namespace and run top to bottom, stopping
+at the first error. If a job fails, fix the cells and queue it again; do not tell the customer about
+tracebacks.`;
 
 function mailExtension(env: Env, doName: string) {
 	const uploadLink = defineTool({
@@ -85,21 +96,24 @@ function mailExtension(env: Env, doName: string) {
 	const runAnalysis = defineTool({
 		name: "run_analysis",
 		description:
-			"Queue a segmentation/analysis job on the runner. Returns at once; a [runner] message arrives when it finishes.",
+			"Queue notebook cells to run on the runner against uploaded files. Returns at once; a [runner] message arrives when it finishes.",
 		parameters: Type.Object({
-			files: Type.Array(Type.String(), { description: "Uploaded file names to run on" }),
-			plan: Type.String({ description: "What the notebook should do" }),
+			files: Type.Array(Type.String(), { description: "Uploaded file names the cells read" }),
+			cells: Type.Array(Type.String(), { description: "Python source of each notebook cell, in order" }),
+			plan: Type.String({ description: "One line on what the notebook does, for the record" }),
 		}),
 		// Keyed by the tool task, so a rerun after a crash finds the job it already queued.
 		replay: "safe",
 		execute: async (args, api, ctx) => {
-			const id = String(api.taskId);
+			// Job IDs are global on the board, so qualify the task ID with the customer.
+			const id = `${doName}:${api.taskId}`;
 			await api.commit(async (tx) => {
 				const state = await tx.doc(MailState);
 				if (!state.jobs.some((job) => job.id === id)) {
-					state.jobs.push({ id, files: args.files, plan: args.plan, status: "queued" });
+					state.jobs.push({ id, files: args.files, plan: args.plan, status: "queued", artifacts: [] });
 				}
 			}, ctx);
+			await jobBoard(env).enqueue({ id, customer: doName, files: args.files, cells: args.cells });
 			return { content: [{ type: "text", text: `Queued job ${id}.` }] };
 		},
 	});
@@ -109,6 +123,38 @@ function mailExtension(env: Env, doName: string) {
 		sections: [section("preamble", () => PROMPT, { tag: false })],
 		tools: [uploadLink, runAnalysis],
 	});
+}
+
+const clip = (text: string, max: number) => (text.length <= max ? text : `…${text.slice(-max)}`);
+
+/** What the agent reads about a finished job: enough to judge it, never a wall of output. */
+export function summarize(id: string, report: JobReport): string {
+	const lines = [`[runner] job ${id} ${report.ok ? "finished" : "FAILED"}.`];
+	report.cells.forEach((cell, i) => {
+		const figures = cell.figures.length ? ` (figures: ${cell.figures.join(", ")})` : "";
+		const text = cell.text.trim();
+		lines.push(`Cell ${i + 1} [${cell.state}]${figures}${text ? `: ${clip(text, cell.state === "error" ? 1500 : 400)}` : ""}`);
+	});
+	if (report.error) lines.push(`Error: ${clip(report.error, 1500)}`);
+	if (report.artifacts.length) lines.push(`Artifacts: ${report.artifacts.join(", ")}`);
+	return lines.join("\n");
+}
+
+/**
+ * MODEL=echo: a model that answers every message by quoting it back. For local runs without an API key
+ * (`wrangler dev`, the runner end-to-end script), where what matters is what reached the agent.
+ */
+function echoProvider() {
+	const faux = fauxProvider();
+	const echo: FauxResponseStep = (ctx) => {
+		faux.appendResponses([echo]);
+		const last = [...ctx.messages].reverse().find((m) => m.role === "user");
+		const content = last?.content;
+		const text = typeof content === "string" ? content : JSON.stringify(content);
+		return fauxAssistantMessage(`Echo: ${text}`);
+	};
+	faux.setResponses([echo]);
+	return faux.provider;
 }
 
 function textOf(entry: { model?: readonly unknown[] } | undefined): string {
@@ -139,9 +185,9 @@ export class MailAgent extends DurableObject<Env> {
 			registry.install(mailExtension(this.env, this.#name()));
 			let models: Models | undefined = testing.models;
 			if (models === undefined) {
-				const anthropic = createModels();
-				anthropic.setProvider(anthropicProvider());
-				models = anthropic;
+				const built = createModels();
+				built.setProvider(this.env.MODEL === "echo" ? echoProvider() : anthropicProvider());
+				models = built;
 			}
 			return Harness.open(await openDurableObjectStorage(this.ctx.storage), { models, registry }, context);
 		})();
@@ -155,9 +201,10 @@ export class MailAgent extends DurableObject<Env> {
 	}
 
 	async #root(harness: Harness) {
-		const model = testing.models
-			? { provider: "faux", modelId: "faux-1" }
-			: { provider: "anthropic", modelId: this.env.MODEL ?? "claude-sonnet-5-5" };
+		const model =
+			testing.models || this.env.MODEL === "echo"
+				? { provider: "faux", modelId: "faux-1" }
+				: { provider: "anthropic", modelId: this.env.MODEL ?? "claude-sonnet-5-5" };
 		return harness.root(context, { agent: { model } });
 	}
 
@@ -269,6 +316,19 @@ export class MailAgent extends DurableObject<Env> {
 			body: JSON.stringify({ from: this.env.FROM_ADDRESS, to: mail.to, subject: mail.subject, text: mail.text, headers }),
 		});
 		if (!response.ok) throw new Error(`Resend ${response.status}: ${await response.text()}`);
+	}
+
+	/** The runner finished (or gave up on) a job: record it and tell the agent. Idempotent by job ID. */
+	async jobReport(id: string, report: JobReport): Promise<void> {
+		const harness = await this.#open();
+		const root = await this.#root(harness);
+		await root.commit(async (tx) => {
+			const job = (await tx.doc(MailState)).jobs.find((j) => j.id === id);
+			if (job === undefined) return;
+			job.status = report.ok ? "done" : "failed";
+			job.artifacts = report.artifacts;
+		}, context);
+		await this.notify(`job:${id}`, summarize(id, report));
 	}
 
 	/** Mail state, for the runner and for tests. */

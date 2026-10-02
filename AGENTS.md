@@ -16,6 +16,7 @@ python3 tools/test_shims.py          # Python shim logic, no browser (~1s)
 python3 tools/test_shims.py --sync   # ...in JSPI mode; BOTH must pass
 
 node tools/drive.mjs                             # full notebook, real GPU (stages tools/test_image.tif)
+node tools/drive.mjs --swiftshader               # ...on a machine with no usable GPU (WebGPU on the CPU, ~10 min)
 node tools/test_agent.mjs                        # agent harness, all providers
 node tools/test_agent.mjs --only gemini          # one of: anthropic, gemini, openai
 
@@ -26,6 +27,14 @@ The npm dev tooling (and `node_modules`) lives under `tools/` — this repo is s
 as-is and has no build step, so the package files are colocated with the only things
 that use them. Bare imports in `tools/*.mjs` resolve from `tools/node_modules`
 regardless of the cwd you invoke them from.
+
+`tools/notebook.mjs` is the headless-notebook layer both browser drivers share: launch Chrome
+with the WebGPU flags, boot `notebook.html`, stage files, append cells, run all, read cells,
+figures, and produced files back. `tools/runner.mjs` is the email agent's compute (see
+`email-agent/README.md`). It claims jobs from the email-agent Worker, runs each in a fresh tab
+through that same layer, and reports back. It launches Chrome with `protocolTimeout: 0`: a
+cell that holds the main thread blocks every DevTools call, and puppeteer's default 180 s
+per call would otherwise kill a run that was fine.
 
 Useful flags: `drive.mjs --headful --logs --keep` (`--keep` preserves the cells in
 localStorage instead of resetting to the seed script). Both browser drivers take
@@ -81,6 +90,9 @@ notebook.html              the notebook + assistant pane
     src/style.css              all CSS
   src/agent/                 llm · agent · tools · prompt · chat · scratch(+worker)
 tools/                     headless drivers + npm dev deps (package.json lives here)
+  tools/notebook.mjs         drive notebook.html headlessly (shared by drive.mjs, runner.mjs)
+  tools/runner.mjs           runs email-agent jobs in the notebook
+email-agent/               the email front end: a Cloudflare Worker (own package.json, own README)
 ```
 
 ### Engines are vendored, not ours to edit

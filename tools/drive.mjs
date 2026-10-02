@@ -7,12 +7,13 @@
 //   node tools/drive.mjs                       # stages tools/test_image.tif, runs the seed
 //   node tools/drive.mjs --stage /path/to/other.tif
 //   node tools/drive.mjs --url http://localhost:8765/notebook.html --keep
+//   node tools/drive.mjs --swiftshader          # no usable GPU: WebGPU on the CPU, very slow
 //
 // Requires a static server on the repo root and puppeteer-core (installed under
 // tools/, since that is where this repo keeps its npm dev tools):
 //   python3 -m http.server 8765 &
 //   npm --prefix tools install
-import puppeteer from "puppeteer-core";
+import * as notebook from "./notebook.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -103,92 +104,53 @@ axes[1].set_title('Ratio_Nuc_Cyto')
 plt.show()`,
 ];
 
-const browser = await puppeteer.launch({
-  executablePath: CHROME,
-  headless: !has("--headful"),
-  // ANGLE-on-Metal is what makes WebGPU work in headless Chrome on macOS; without
-  // these the page boots but navigator.gpu is missing and every model call fails.
-  args: ["--enable-unsafe-webgpu", "--use-angle=metal", "--no-sandbox"],
+const browser = await notebook.launch({
+  chrome: CHROME, headful: has("--headful"), swiftshader: has("--swiftshader"),
 });
 
 let failed = false;
 try {
-  const page = await browser.newPage();
-  const logs = [];
-  page.on("console", (m) => logs.push(m.text()));
-  page.on("pageerror", (e) => { logs.push("PAGEERROR " + e.message); failed = true; });
-
   console.log(`→ ${URL_}`);
-  await page.goto(URL_, { waitUntil: "domcontentloaded" });
-
   // Start from the example pipeline rather than whatever a previous manual session
   // left in localStorage, so a run is reproducible.
-  if (!has("--keep")) {
-    await page.evaluate(() => localStorage.removeItem("ptero-cells"));
-    await page.reload({ waitUntil: "domcontentloaded" });
-  }
-
-  await page.waitForFunction(
-    () => document.getElementById("stat")?.textContent === "ready", { timeout: TIMEOUT });
+  const { page, logs } = await notebook.openNotebook(browser, URL_, { timeout: TIMEOUT, fresh: !has("--keep") });
   console.log("✓ booted");
 
   // A fresh notebook (no saved session) starts empty now that the app doesn't ship its
   // own example — seed this driver's fixture pipeline so the run stays reproducible.
-  const hadCells = await page.evaluate(() => document.querySelectorAll(".cell").length > 0);
-  if (!hadCells) {
-    await page.evaluate(async (seed) => {
-      const cellsMod = await import("./src/notebook/cells.js");
-      for (const src of seed) cellsMod.appendCell(src);
-    }, SEED_PIPELINE);
+  if (await notebook.cellCount(page) === 0) {
+    await notebook.appendCells(page, SEED_PIPELINE);
     console.log(`✓ seeded ${SEED_PIPELINE.length} cells (no saved notebook)`);
   }
 
-  const banners = await page.evaluate(() =>
-    [...document.querySelectorAll(".banner")].map((b) => b.textContent));
-  for (const b of banners) console.log("! " + b);
+  for (const b of await notebook.banners(page)) console.log("! " + b);
 
-  // Stage input files into the Pyodide FS — the folder picker needs a real user
-  // gesture, so a headless run has no other way to supply an image.
   for (const rel of STAGE_FILES) {
     const name = rel.split("/").pop();
-    await page.evaluate(async (url, name) => {
-      const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
-      window.pyodide.FS.writeFile(name, buf);
-    }, `${BASE}/${rel}`, name);
+    await notebook.stageUrl(page, `${BASE}/${rel}`, name);
     console.log(`✓ staged ${name}`);
   }
 
   console.log("\n→ run all");
-  await page.click("#runall");
-  await page.waitForFunction(
-    () => !document.getElementById("runall").disabled, { timeout: TIMEOUT });
+  await notebook.runAll(page, { timeout: TIMEOUT });
 
-  const cells = await page.evaluate(() =>
-    [...document.querySelectorAll(".cell")].map((el, i) => ({
-      i,
-      state: el.dataset.state,
-      author: el.dataset.author,
-      took: el.querySelector(".cellstat")?.textContent || "",
-      out: (el.querySelector(".cellout")?.textContent || "").trim().slice(0, 600),
-      figs: el.querySelectorAll(".cellout-fig").length,
-      table: !!el.querySelector(".cellout-html table"),
-    })));
+  const cells = await notebook.readCells(page);
 
   console.log("");
   for (const c of cells) {
     const mark = c.state === "done" ? "✓" : c.state === "error" ? "✗" : "·";
-    const extras = [c.figs ? `${c.figs} figure(s)` : null, c.table ? "table" : null]
+    const extras = [c.figures.length ? `${c.figures.length} figure(s)` : null, c.table ? "table" : null]
       .filter(Boolean).join(", ");
     console.log(`${mark} cell ${c.i} [${c.state}] ${c.took}${extras ? "  " + extras : ""}`);
-    if (c.out) console.log("    " + c.out.replace(/\n/g, "\n    "));
+    if (c.out) console.log("    " + c.out.slice(0, 600).replace(/\n/g, "\n    "));
     if (c.state === "error") failed = true;
     if (c.state !== "done" && c.state !== "error") failed = true;
   }
 
-  const files = await page.evaluate(() =>
-    [...document.querySelectorAll("#downloads .download")].map((a) => a.textContent));
-  if (files.length) console.log("\nproduced: " + files.join(", "));
+  const files = await notebook.producedFiles(page);
+  if (files.length) console.log("\nproduced: " + files.map((f) => `⤓ ${f}`).join(", "));
 
+  if (logs.some((l) => l.startsWith("PAGEERROR"))) failed = true;
   if (has("--logs")) {
     console.log("\n--- browser console ---");
     for (const l of logs) console.log("  " + l);

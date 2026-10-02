@@ -5,9 +5,14 @@
 	"compatibility_date": "2026-08-15",
 	"compatibility_flags": ["nodejs_compat"],
 	"durable_objects": {
-		"bindings": [{ "name": "MAIL_AGENT", "class_name": "MailAgent" }]
+		"bindings": [
+			{ "name": "MAIL_AGENT", "class_name": "MailAgent" },
+			{ "name": "JOBS", "class_name": "JobBoard" }
+		]
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MailAgent"] }],
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["MailAgent", "JobBoard"] }],
+	// Uploads and runner results. R2's free tier: 10 GB stored, no egress fees.
+	"r2_buckets": [{ "binding": "FILES", "bucket_name": "ptero-email-files" }],
 	"vars": {
 		"PUBLIC_URL": "https://ptero.example",
 		"FROM_ADDRESS": "ptero <help@ptero.example>"

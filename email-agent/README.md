@@ -7,14 +7,45 @@ object's own SQLite.
 ```
 inbound email ─▶ email() ─▶ MailAgent DO (idFromName(sender))
                                receive(): commit mail state, submit(requestId = "mail:<Message-ID>"), setAlarm(now)
-upload page   ─▶ POST /u/:customer/:token/done ─▶ notify("upload:…")   ─┐ also submissions,
-runner        ─▶ POST /jobs/:customer/:id/done  ─▶ notify("job:<id>")   ─┘ answered by mail
+upload page   ─▶ PUT  /u/:customer/:token/files/:name ─▶ R2 uploads/<customer>/<name>
+              ─▶ POST /u/:customer/:token/done ─▶ notify("upload:…")        ─┐ also submissions,
+run_analysis  ─▶ JobBoard DO (one queue) ◀─ tools/runner.mjs polls            │ answered by mail
+runner report ─▶ JobBoard.complete ─▶ MailAgent.jobReport ─▶ notify("job:<id>") ─┘
                                alarm(): watchdog alarm → harness.resume() → wait for each pending submission
                                         → send reply (Idempotency-Key = reply:<submission>) → record as sent
 ```
 
 The model's final message in each run is the email body. Anything asynchronous, like an upload finishing or a
 runner job finishing, comes back as a new submission, so nothing has to stay alive to wait for it.
+
+## The runner
+
+Analyses run in a real `notebook.html` with WebGPU, driven by [`tools/runner.mjs`](../tools/runner.mjs) on any
+machine with Chrome and a GPU (your Mac is fine). The agent's `run_analysis` tool queues notebook cells, plus
+the uploaded files they read, on the `JobBoard` Durable Object. The runner polls it:
+
+| Runner call | |
+|---|---|
+| `POST /runner/claim` | The oldest queued job, or 204. A claim is a 20-minute **lease** (`X-Lease`). |
+| `GET /runner/jobs/:id/files/:name` | One of *that job's* input files, from R2. |
+| `PUT /runner/jobs/:id/artifacts/:name` | A figure (`cell-N-fig-K.png`), a file a cell wrote, or `notebook.json`, to R2 `results/<job>/`. |
+| `POST /runner/jobs/:id/report` | `{ok, error?, cells: [{state, text, figures}], artifacts}`. The board closes the lease and hands the report to the customer's agent as a `[runner]` message. |
+
+All of these need `Authorization: Bearer $RUNNER_TOKEN`, and every job route also needs the job's live lease.
+A runner that dies mid-job loses the lease when it expires, and the job goes out again. After three lost
+leases the board gives up and tells the agent. The runner only ever reports what the **cells** did: if the
+notebook doesn't boot or the API is unreachable, it leaves the job to its lease. Otherwise the agent would
+"fix" cells that were fine.
+
+```bash
+python3 -m http.server 8765 &                                   # ptero, from the repo root
+RUNNER_TOKEN=… node tools/runner.mjs --api https://<worker>     # --once, --poll <s>, --job-timeout <s>, --swiftshader
+```
+
+`npm run e2e` (with that server up) runs the Worker in Miniflare and the runner against it. It queues a
+StarDist segmentation of `tools/test_image.tif` and a job that fails on purpose, then checks the board's
+verdicts, the artifacts in R2, and that both reports reached the agent. `MODEL=echo` (a model that quotes back
+what it was sent) stands in for Claude, so no API key is needed. The same setting works for `wrangler dev`.
 
 ## What the test answered
 
@@ -50,8 +81,13 @@ At that point the control plane is effectively free, and the LLM bill is the rea
 
 - Outbound email: `#send` posts to Resend when `RESEND_API_KEY` is set. Workers' `send_email` binding can only
   reach verified addresses.
-- The upload page (a ptero page that writes thumbnails and `meta.json` to R2), R2 itself, and the runner
-  (`tools/drive.mjs` in a polling loop).
+- The upload page itself. The Worker accepts `PUT /u/…/files/:name` and `POST /u/…/done`, but there is no
+  page yet, and nothing writes thumbnails or `meta.json` for the agent to look at. Uploads go through the
+  Worker, so they are capped at its 100 MB request limit; presigned R2 URLs would remove that cap.
+- Getting results to the customer: figures land in R2, but the agent can't look at them (no vision tool) or
+  attach them to its email, and `notebook.json` isn't served as a ptero link yet.
+- A cap on failed attempts. ptero's in-browser agent stops after 3 failed scratch runs; here the agent can
+  requeue fixed cells indefinitely.
 - Upload tokens are random UUIDs, not signed and not expiring. Sender authentication (SPF/DKIM), a sender
   allowlist, and per-sender rate limits are also missing.
 - `receive()` submits and then records the pending reply in two commits. If it crashes between them, the
@@ -61,7 +97,7 @@ At that point the control plane is effectively free, and the LLM bill is the rea
 
 ```bash
 npm install              # .npmrc sets legacy-peer-deps: npm 10's resolver crashes on vitest 4's peer set
-npm test                 # conformance + DO SQL behaviour + the email loop, inside workerd
+npm test                 # conformance + DO SQL behaviour + the email loop + the job board, inside workerd
 npm run typecheck
 npm run bench            # CPU per run under Node
 ```

@@ -73,7 +73,7 @@ it("runs the mocked transcript: link, upload notice, queued analysis, runner cal
 	const link = sent[0]!.text.match(/https:\/\/ptero\.example\/u\/\S+/)?.[0];
 	expect(link).toBeDefined();
 
-	// 2. The upload page reports the files → a system notice starts a run → "I see 3 files".
+	// 2. The upload page PUTs each file to R2, then reports them → a system notice starts a run → "I see 3 files".
 	let notice = "";
 	faux.setResponses([
 		(ctx) => {
@@ -81,6 +81,12 @@ it("runs the mocked transcript: link, upload notice, queued analysis, runner cal
 			return say("I see 001.tif, 002.tif, 005.tif. Look right?");
 		},
 	]);
+	for (const name of ["001.tif", "002.tif", "005.tif"]) {
+		const put = await worker.fetch(new Request(`${link}/files/${name}`, { method: "PUT", body: `pixels of ${name}` }), testEnv);
+		expect(put.status).toBe(200);
+	}
+	const traversal = await worker.fetch(new Request(`${link}/files/..`, { method: "PUT", body: "x" }), testEnv);
+	expect(traversal.status).toBe(404);
 	const done = await worker.fetch(
 		new Request(`${link}/done`, { method: "POST", body: JSON.stringify({ files: ["001.tif", "002.tif", "005.tif"] }) }),
 		testEnv,
@@ -90,34 +96,55 @@ it("runs the mocked transcript: link, upload notice, queued analysis, runner cal
 	expect(notice).toContain("[upload] 3 files arrived");
 	expect(sent[1]!.text).toContain("005.tif");
 
-	// 3. "Skip 005, it has a bubble" → the agent queues an analysis and says it will report back.
+	// 3. "Skip 005, it has a bubble" → the agent queues notebook cells and says it will report back.
+	const cells = ["from skimage import io\nimg = io.imread('001.tif')", "img.shape"];
 	faux.setResponses([
-		tool("run_analysis", { files: ["001.tif", "002.tif"], plan: "cellpose cyto3 on GFAP, stardist on DAPI" }),
+		tool("run_analysis", { files: ["001.tif", "002.tif"], cells, plan: "cyto3 on GFAP, stardist on DAPI" }),
 		say("On it, I'll email you when the analysis finishes."),
 	]);
 	await worker.email(inbound(user, "<m2@lab.example>", "Re: Segmenting cells", "Skip 005.tif, it has a bubble."), testEnv);
 	await expect.poll(() => sent.length).toBe(3);
 	expect(sent[2]).toMatchObject({ inReplyTo: "<m2@lab.example>", subject: "Re: Segmenting cells" });
-	const jobs = (await stub.mailState())!.jobs;
-	expect(jobs).toEqual([expect.objectContaining({ files: ["001.tif", "002.tif"], status: "queued" })]);
+	expect((await stub.mailState())!.jobs).toEqual([
+		expect.objectContaining({ files: ["001.tif", "002.tif"], status: "queued" }),
+	]);
 
-	// 4. The runner finishes → its callback starts a run → the preview email, threaded under the last mail.
-	const unauthorized = await worker.fetch(
-		new Request(`https://ptero.example/jobs/${user}/${jobs[0]!.id}/done`, { method: "POST", body: "{}" }),
-		testEnv,
-	);
-	expect(unauthorized.status).toBe(401);
-	faux.setResponses([say("All done: 412 cells across 2 images. Preview attached.")]);
-	await worker.fetch(
-		new Request(`https://ptero.example/jobs/${user}/${jobs[0]!.id}/done`, {
-			method: "POST",
-			headers: { Authorization: "Bearer runner-secret" },
-			body: JSON.stringify({ summary: "412 cells, preview.png" }),
-		}),
-		testEnv,
-	);
+	// 4. The runner claims the job, reads its inputs, stores a figure, and reports → the preview email.
+	expect((await runner("POST", "/runner/claim", undefined, "wrong-token")).status).toBe(401);
+	const claim = (await (await runner("POST", "/runner/claim")).json()) as { id: string; lease: string; cells: string[] };
+	expect(claim.cells).toEqual(cells);
+	const job = `/runner/jobs/${encodeURIComponent(claim.id)}`;
+	expect(await (await runner("GET", `${job}/files/001.tif`, undefined, undefined, claim.lease)).text()).toBe("pixels of 001.tif");
+	// Only the job's own files, and only under its lease.
+	expect((await runner("GET", `${job}/files/005.tif`, undefined, undefined, claim.lease)).status).toBe(404);
+	expect((await runner("GET", `${job}/files/001.tif`, undefined, undefined, "stale")).status).toBe(404);
+	expect((await runner("PUT", `${job}/artifacts/fig-2-1.png`, "png bytes", undefined, claim.lease)).status).toBe(200);
+	expect(await (await env.FILES.get(`results/${claim.id}/fig-2-1.png`))!.text()).toBe("png bytes");
+
+	let report = "";
+	faux.setResponses([
+		(ctx) => {
+			report = lastUser(ctx);
+			return say("All done: 412 cells across 2 images. Preview attached.");
+		},
+	]);
+	const body = JSON.stringify({
+		ok: true,
+		cells: [
+			{ state: "done", text: "", figures: [] },
+			{ state: "done", text: "(512, 512, 3)", figures: ["fig-2-1.png"] },
+		],
+		artifacts: ["fig-2-1.png"],
+	});
+	expect((await runner("POST", `${job}/report`, body, undefined, claim.lease)).status).toBe(200);
 	await expect.poll(() => sent.length).toBe(4);
+	expect(report).toContain("finished");
+	expect(report).toContain("(512, 512, 3)");
 	expect(sent[3]).toMatchObject({ inReplyTo: "<m2@lab.example>", text: expect.stringContaining("412 cells") });
+	expect((await stub.mailState())!.jobs[0]).toMatchObject({ status: "done", artifacts: ["fig-2-1.png"] });
+	// The lease closed with the report: a second report is refused, and the job is not handed out again.
+	expect((await runner("POST", `${job}/report`, body, undefined, claim.lease)).status).toBe(409);
+	expect((await runner("POST", "/runner/claim")).status).toBe(204);
 
 	// Every email went out once, under its own idempotency key, and nothing is left owed.
 	expect(new Set(sent.map((m) => m.key)).size).toBe(4);
@@ -168,6 +195,12 @@ it("finishes and mails exactly once after the object dies mid-model-call", async
 	expect(sent).toEqual([expect.objectContaining({ text: "Recovered answer.", inReplyTo: "<c1@lab.example>" })]);
 	expect(await runInDurableObject(stub, (_, state) => state.storage.getAlarm())).toBeNull();
 });
+
+function runner(method: string, path: string, body?: string, token = "runner-secret", lease?: string) {
+	const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+	if (lease !== undefined) headers["X-Lease"] = lease;
+	return worker.fetch(new Request(`https://ptero.example${path}`, { method, headers, body }), testEnv);
+}
 
 /** The upload_link tool result the model was just given. */
 function toolText(ctx: { messages: readonly { role: string; content: unknown }[] }): string {
