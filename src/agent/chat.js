@@ -4,6 +4,7 @@ import { Agent } from "./agent.js";
 import {
   PROVIDERS, getProviderId, setProviderId, provider,
   getKey, setKey, hasKey, getModel, setModel, getBaseUrl, setBaseUrl, listModels,
+  EFFORT_LEVELS, getEffort, setEffort,
 } from "./llm.js";
 import * as cellsMod from "../notebook/cells.js";
 
@@ -311,7 +312,17 @@ function openSettings() {
   }
   sel.value = getProviderId();
   showProviderFields(sel.value);
+  // Effort is global, not per-provider, so it's set here once rather than swapped in
+  // showProviderFields alongside the key/model fields.
+  $("effort").value = String(EFFORT_LEVELS.indexOf(getEffort()));
+  syncEffortLabel();
   $("settings").showModal();
+}
+
+// The slider stores an index into EFFORT_LEVELS; show the human label next to it.
+function syncEffortLabel() {
+  const level = EFFORT_LEVELS[Number($("effort").value)] ?? "medium";
+  $("effortval").textContent = `· ${level}`;
 }
 
 // Ask the provider what models the key can actually reach, rather than shipping a
@@ -354,6 +365,7 @@ function saveSettings() {
   setKey($("apikey").value, editingProvider);
   setModel($("modelname").value, editingProvider);
   if (PROVIDERS[editingProvider].defaultBaseUrl) setBaseUrl($("baseurl").value, editingProvider);
+  setEffort(EFFORT_LEVELS[Number($("effort").value)]);
   setProviderId(editingProvider);
   $("settings").close();
   updateGate();
@@ -368,7 +380,7 @@ function updateGate() {
     ? defaultPlaceholder
     : "Add an API key under ⚙ to start";
   $("chatsettings").title = ready
-    ? `${provider().label} · ${getModel()}`
+    ? `${provider().label} · ${getModel()} · thinking: ${getEffort()}`
     : "Add an API key";
 }
 
@@ -430,6 +442,7 @@ export function mountChat() {
   $("chatsettings").addEventListener("click", openSettings);
   $("settingssave").addEventListener("click", (e) => { e.preventDefault(); saveSettings(); });
   $("loadmodels").addEventListener("click", loadModelList);
+  $("effort").addEventListener("input", syncEffortLabel);
   $("providersel").addEventListener("change", (e) => {
     // Save what was typed for the provider being left, so switching away and back
     // doesn't lose a freshly pasted key.

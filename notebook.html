@@ -79,6 +79,17 @@
     <datalist id="modellist"></datalist>
     <p class="hint" id="modelhint">Keys and model choices are remembered per provider.</p>
 
+    <label for="effort">Thinking effort <span id="effortval"></span></label>
+    <input id="effort" type="range" min="0" max="3" step="1" list="effortticks">
+    <datalist id="effortticks">
+      <option value="0" label="Off"></option>
+      <option value="1" label="Low"></option>
+      <option value="2" label="Medium"></option>
+      <option value="3" label="High"></option>
+    </datalist>
+    <p class="hint">Higher effort means deeper reasoning before each answer — slower and
+      more tokens. The reasoning itself is never shown.</p>
+
     <div class="row">
       <button id="settingssave">Save</button>
       <button value="cancel" class="btn-subtle">Cancel</button>
