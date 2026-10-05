@@ -1,0 +1,22 @@
+{
+	// The homework book's Homework 1 deploys this as-is. Later homeworks add the commented sections.
+	"name": "email-homework",
+	"main": "src/index.ts",
+	// The newest date the bundled workerd supports; bump it when you bump wrangler.
+	"compatibility_date": "2026-08-15",
+	"compatibility_flags": ["nodejs_compat"],
+
+	"vars": {
+		"FROM_ADDRESS": "bot@example.com"
+		// Homework 3: "MODEL": "claude-haiku-4-5-20251001", "ALLOWED_SENDERS": "you@example.com"
+	}
+
+	// Homework 3: secrets are NOT written here. Run: npx wrangler secret put ANTHROPIC_API_KEY
+
+	// Homework 4: one Durable Object per sender.
+	// "durable_objects": { "bindings": [{ "name": "AGENT", "class_name": "Agent" }] },
+	// "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Agent"] }],
+
+	// Homework 8: uploads.
+	// "r2_buckets": [{ "binding": "FILES", "bucket_name": "email-homework-files" }],
+}
