@@ -6,16 +6,25 @@
 	"compatibility_date": "2026-08-15",
 	"compatibility_flags": ["nodejs_compat"],
 
+	// Homework 1: the address that routes to this Worker. Deploying creates the Email Routing rule
+	// (Wrangler 4.113+). Use your own domain; an empty list [] removes the rules this Worker manages.
+	// "addresses": ["bot@yourdomain.com"],
+
 	"vars": {
+		// Must be on the domain that receives the mail, or reply() throws. Change it before deploying.
 		"FROM_ADDRESS": "bot@example.com"
 		// Homework 3: "MODEL": "claude-haiku-4-5-20251001", "ALLOWED_SENDERS": "you@example.com"
-	}
+	},
 
 	// Homework 3: secrets are NOT written here. Run: npx wrangler secret put ANTHROPIC_API_KEY
 
 	// Homework 4: one Durable Object per sender.
 	// "durable_objects": { "bindings": [{ "name": "AGENT", "class_name": "Agent" }] },
 	// "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Agent"] }],
+
+	// Homework 5: send mail on your own schedule. Free plan: only to your verified destination addresses.
+	// "remote": true makes `wrangler dev` send real email.
+	// "send_email": [{ "name": "EMAIL", "remote": true }],
 
 	// Homework 8: uploads.
 	// "r2_buckets": [{ "binding": "FILES", "bucket_name": "email-homework-files" }],

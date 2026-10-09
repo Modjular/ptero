@@ -6,6 +6,10 @@
 //   message.reply({ from, subject, text })                    answer it        (Homework 1)
 //   message.forward(address)                                  pass it on
 //   message.setReject(reason)                                 bounce it        (Homework 3)
+//
+// reply() throws unless: the incoming mail passed DMARC, it's the first reply to it, it goes back to the
+// sender, it comes from the domain that received the mail, and the thread has at most 100 References.
+// Try it locally: `npm run dev`, then `npm run email:local` in a second terminal.
 
 export type Env = Cloudflare.Env;
 
