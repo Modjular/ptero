@@ -28,9 +28,10 @@ Try first, then compare.
 **Suggested habit:** commit and tag at the end of each homework (`git tag hw-1`), so `git diff hw-3 hw-4` shows
 exactly what one idea cost you.
 
-**Before your first deploy:** set `FROM_ADDRESS` to an address on your own domain (`reply()` refuses any
-other), and uncomment `addresses` with the address that should reach this Worker. The deploy creates that
-Email Routing rule.
+**Before your first deploy:** pick the bot's address, say `bot@yourdomain.com`, and use it twice: in `addresses`
+(mail to it reaches this Worker; the deploy creates that Email Routing rule) and as `FROM_ADDRESS` (the bot's
+replies come from it). Not your personal address: Cloudflare only lets the Worker reply as the domain that
+received the mail.
 
 **Gotchas already handled here:**
 

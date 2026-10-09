@@ -11,7 +11,9 @@
 	// "addresses": ["bot@yourdomain.com"],
 
 	"vars": {
-		// Must be on the domain that receives the mail, or reply() throws. Change it before deploying.
+		// The bot's own address: replies go out From this. Use the same address as in "addresses".
+		// Cloudflare only lets the Worker reply as the domain that received the mail, so your personal
+		// address fails with "mail from is not from the correct domain".
 		"FROM_ADDRESS": "bot@example.com"
 		// Homework 3: "MODEL": "claude-haiku-4-5-20251001", "ALLOWED_SENDERS": "you@example.com"
 	},
