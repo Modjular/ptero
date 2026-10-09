@@ -17,7 +17,7 @@ npm run tail        # live logs from the deployed Worker
 | File | What it's for |
 |---|---|
 | `src/index.ts` | Your Worker: the `email()` handler (Homework 1 on), `fetch()` (Homework 8 on) |
-| `wrangler.jsonc` | Config; commented sections show where Homeworks 3, 4 and 8 add vars and bindings |
+| `wrangler.jsonc` | Config; commented sections show where Homeworks 1, 3, 4, 5 and 8 add config |
 | `worker-configuration.d.ts` | The types of those bindings; add a line whenever `wrangler.jsonc` gains one |
 | `test/hw1.test.ts` | Homework 1's test, with a fake message; write `hw2.test.ts` and on yourself |
 | `scripts/local-email.mjs` | `npm run email:local [subject] [body]`: a real email event for `wrangler dev`, no domain needed |
