@@ -62,6 +62,21 @@ export function setModel(m, id = getProviderId()) {
   m?.trim() ? localStorage.setItem(modelStore(id), m.trim()) : localStorage.removeItem(modelStore(id));
 }
 
+// Thinking effort is one conceptual control, so it's stored globally rather than
+// per-provider — each provider's send() below maps this level onto its own knob
+// (Anthropic's effort enum, Gemini's thinking budget, OpenAI's reasoning_effort). The
+// levels are deliberately abstract: a raw token budget can't be shared across providers
+// (Anthropic rejects budget_tokens on current models outright), an ordered level can.
+const EFFORT_STORE = "ptero-effort";
+export const EFFORT_LEVELS = ["off", "low", "medium", "high"];
+export function getEffort() {
+  const v = localStorage.getItem(EFFORT_STORE);
+  return EFFORT_LEVELS.includes(v) ? v : "medium";
+}
+export function setEffort(level) {
+  if (EFFORT_LEVELS.includes(level)) localStorage.setItem(EFFORT_STORE, level);
+}
+
 // Only providers that opt in (currently just `openai`, via `defaultBaseUrl`) use this —
 // Anthropic and Gemini have fixed hosts.
 export function getBaseUrl(id = getProviderId()) {
@@ -142,15 +157,26 @@ const anthropic = {
     return data.map(m => ({ id: m.id, label: m.display_name || m.id }));
   },
 
-  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens }) {
+  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens, effort }) {
+    // Extended thinking is expressed through the modern adaptive+effort surface, never
+    // `budget_tokens` (removed on current models — sending it is a 400). "off" disables
+    // thinking outright; any other level runs adaptive with the matching effort bucket.
+    // Thinking output is deliberately not requested for display (default is empty
+    // thinking text): the reasoning must never reach the transcript, only steer depth.
+    const thinking = effort === "off"
+      ? { type: "disabled" }
+      : { type: "adaptive" };
+    const body = {
+      model: getModel(), max_tokens: maxTokens, system, messages, tools, thinking,
+      stream: true,
+    };
+    if (effort !== "off") body.output_config = { effort };
     let res;
     try {
       res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify({
-          model: getModel(), max_tokens: maxTokens, system, messages, tools, stream: true,
-        }),
+        body: JSON.stringify(body),
         signal,
       });
     } catch (e) {
@@ -166,7 +192,14 @@ const anthropic = {
     await readSSE(res, (ev) => {
       if (ev.type === "content_block_start") {
         const b = ev.content_block;
-        blocks[ev.index] = b.type === "tool_use"
+        // Thinking blocks (and their redacted form) must be captured and carried back
+        // in history verbatim — the API rejects a tool-use turn on replay if the
+        // thinking that produced it was stripped. They accumulate their own deltas
+        // (`thinking_delta` / `signature_delta`) but never stream to onText, so the
+        // reasoning is preserved for the model yet stays out of the transcript.
+        if (b.type === "thinking") blocks[ev.index] = { type: "thinking", thinking: b.thinking || "", signature: b.signature || "" };
+        else if (b.type === "redacted_thinking") blocks[ev.index] = { type: "redacted_thinking", data: b.data };
+        else blocks[ev.index] = b.type === "tool_use"
           ? { type: "tool_use", id: b.id, name: b.name, _json: "" }
           : { type: "text", text: "" };
         // The model's tool-call arguments (e.g. a whole scratch-test draft) can take a
@@ -179,6 +212,8 @@ const anthropic = {
         if (!b) return;
         if (ev.delta.type === "text_delta") { b.text += ev.delta.text; onText?.(ev.delta.text); }
         else if (ev.delta.type === "input_json_delta") b._json += ev.delta.partial_json;
+        else if (ev.delta.type === "thinking_delta") b.thinking += ev.delta.thinking;
+        else if (ev.delta.type === "signature_delta") b.signature += ev.delta.signature;
       } else if (ev.type === "content_block_stop") {
         const b = blocks[ev.index];
         if (b?.type === "tool_use") {
@@ -309,8 +344,19 @@ const gemini = {
       .map(m => ({ id: m.name.replace(/^models\//, ""), label: m.displayName || m.name }));
   },
 
-  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens }) {
+  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens, effort }) {
     const model = getModel();
+    // Gemini is the one provider whose thinking knob really is a token budget. Keep the
+    // per-level budgets modest and well under maxOutputTokens (raised below when on) so
+    // reasoning can't starve the visible answer. "off" omits thinkingConfig, leaving the
+    // model at its own default — 2.5 Pro can't be forced to zero, so this is the closest
+    // honest mapping. includeThoughts is left off: thoughts must never reach the UI.
+    const budgets = { low: 512, medium: 2048, high: 8192 };
+    const generationConfig = { maxOutputTokens: maxTokens };
+    if (effort !== "off") {
+      generationConfig.thinkingConfig = { thinkingBudget: budgets[effort] };
+      generationConfig.maxOutputTokens = maxTokens + budgets[effort];
+    }
     let res;
     try {
       res = await fetch(
@@ -321,7 +367,7 @@ const gemini = {
             systemInstruction: system ? { parts: [{ text: system }] } : undefined,
             contents: geminiContents(messages),
             tools: geminiTools(tools),
-            generationConfig: { maxOutputTokens: maxTokens },
+            generationConfig,
           }),
           signal,
         });
@@ -343,6 +389,10 @@ const gemini = {
       if (!cand) return;
       stopReason = cand.finishReason ?? stopReason;
       for (const part of cand.content?.parts ?? []) {
+        // A part flagged `thought: true` is Gemini's reasoning summary. Same rule as
+        // Anthropic's thinking blocks: it must not reach the transcript. We don't carry
+        // it in history either — Gemini has no replay requirement for it.
+        if (part.thought) continue;
         if (part.text) {
           const last = content[content.length - 1];
           if (last?.type === "text") last.text += part.text;
@@ -505,19 +555,24 @@ const openai = {
     return data.map(m => ({ id: m.id, label: m.id }));
   },
 
-  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens }) {
+  async send({ system, messages, tools, onText, onToolStart, signal, maxTokens, effort }) {
+    // `reasoning_effort` is the OpenAI-compatible reasoning knob. Non-reasoning models
+    // ignore it, and any inline <think> a reasoning model emits is already stripped by
+    // thinkFilter() below, so there's nothing further to hide. "off" omits it entirely.
+    const body = {
+      model: getModel(),
+      messages: openaiMessages(system, messages),
+      tools: openaiTools(tools),
+      max_tokens: maxTokens,
+      stream: true,
+    };
+    if (effort !== "off") body.reasoning_effort = effort;
     let res;
     try {
       res = await fetch(`${getBaseUrl()}/chat/completions`, {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify({
-          model: getModel(),
-          messages: openaiMessages(system, messages),
-          tools: openaiTools(tools),
-          max_tokens: maxTokens,
-          stream: true,
-        }),
+        body: JSON.stringify(body),
         signal,
       });
     } catch (e) {
@@ -581,8 +636,8 @@ const openai = {
 export const PROVIDERS = { anthropic, gemini, openai };
 
 // ---- dispatch ---------------------------------------------------------------------------
-export async function send({ system, messages, tools, onText, onToolStart, signal, maxTokens = 4096 }) {
-  return provider().send({ system, messages, tools, onText, onToolStart, signal, maxTokens });
+export async function send({ system, messages, tools, onText, onToolStart, signal, maxTokens = 4096, effort = getEffort() }) {
+  return provider().send({ system, messages, tools, onText, onToolStart, signal, maxTokens, effort });
 }
 
 export async function listModels() {

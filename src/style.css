@@ -468,6 +468,12 @@ code {
 }
 #settings .field-row { display: flex; gap: 8px; }
 #settings .field-row input { flex: 1; min-width: 0; }
+
+/* The range input must shed the text-field chrome the generic rule above applies. */
+#settings input[type="range"] {
+  padding: 0; background: none; border: none; accent-color: var(--accent-primary);
+}
+#settings #effortval { color: var(--text-main); text-transform: capitalize; }
 #settings .field-row button { padding: 7px 12px; font-size: 12px; white-space: nowrap; }
 #settings .hint a { color: var(--accent-primary); }
 body.theme-light #settings .hint a { color: var(--accent-primary-hover); }
